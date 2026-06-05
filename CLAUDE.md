@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A [Stash](https://github.com/stashapp/stash) plugin that classifies images using classical ML (no neural networks) and auto-applies tags. The initial use case: tag images that contain no people with an "exclude" label, targeting Instagram media libraries.
+A [Stash](https://github.com/stashapp/stash) plugin that classifies images using local ML inference and auto-applies tags. The initial use case: tag images where no person is the main subject with an "exclude" label, targeting Instagram media libraries.
 
 ## Development Commands
 
@@ -12,11 +12,14 @@ A [Stash](https://github.com/stashapp/stash) plugin that classifies images using
 # Install dependencies (creates .venv automatically)
 uv sync
 
-# Run tests
+# Run unit tests
 uv run pytest
 
 # Run a single test
-uv run pytest tests/test_classifier.py::test_no_person_detected
+uv run pytest tests/test_classifier.py::test_returns_false_for_missing_file
+
+# Validate classifier accuracy against fixture images
+uv run python -m tests.check_fixtures
 
 # Lint
 uv run flake8 . --max-line-length=100
@@ -39,16 +42,16 @@ Stash plugins are invoked as subprocess tasks. Stash passes JSON to the plugin v
 
 - `stash-image-classifier.yml` — Plugin manifest. Declares task modes, the exec command, and required permissions.
 - `main.py` — Entry point. Reads JSON from stdin, dispatches to task handlers.
-- `src/classifier.py` — Core ML classification logic (HOG + SVM or similar).
+- `src/classifier.py` — YOLOv8-based person detection with confidence and area thresholds.
 - `src/stash_client.py` — GraphQL client for querying images and applying tags via the Stash API.
-- `tests/` — Unit tests for classifier and integration tests against a mock Stash API.
+- `tests/check_fixtures.py` — Manual accuracy check against labelled images in `tests/fixtures/person_detection/{include,exclude}/`. Not part of the pytest suite; run directly to validate real-world performance.
 
 ### Plugin Manifest Shape
 
 ```yaml
 name: Image Classifier
-description: Classifies images and applies tags using classical ML
-url: https://github.com/...
+description: Classifies images and applies tags using local ML inference
+url: https://github.com/suciodev/stash-image-classifier
 version: 0.1.0
 exec:
   - python
@@ -71,34 +74,37 @@ Main receives input like:
 }
 ```
 
-Progress and log output goes to **stderr** in the format Stash expects:
+Progress and log lines go to **stdout** as newline-delimited JSON:
 ```
-{"level":"info","message":"Processing image 1 of 100"}
-{"progress":0.5}
+{"progress": 0.5}
+{"type": "Info", "message": "Processing image 1 of 100"}
 ```
 
 ## Classification Approach
 
 **Constraint: fully local and offline — no AI API calls, no token costs.** Local neural network inference is fine.
 
-Preferred stack:
-- `ultralytics` (YOLOv8) — person detection; model downloads once on first run (~6MB), then cached locally
-- `opencv-python` — image loading and preprocessing
-- `Pillow` — fallback image handling
+Stack:
+- `ultralytics` (YOLOv8n) — person detection; model (~6MB) downloads once on first run then lives in the project root. Bundle `yolov8n.pt` alongside the plugin for fully-offline deployments.
+- `opencv-python` — image loading
+- `requests` — Stash GraphQL API calls
 
-### Person Detection Strategy
+### Detection Logic
 
-Use YOLOv8 nano (`yolov8n.pt`) for person detection. It runs on CPU, is accurate on real-world photos, and requires no API keys:
+`ImageClassifier` in `src/classifier.py` uses two thresholds to distinguish "person is the subject" from "person appears incidentally":
 
-```python
-from ultralytics import YOLO
+- **`min_confidence` (default 0.60)** — passed directly to YOLO; boxes below this are discarded before our code sees them. Filters low-confidence partial detections (blurred limbs, reflections).
+- **`min_area_fraction` (default 0.05)** — post-inference; a box must cover ≥5% of image area to count. Filters small background figures.
 
-model = YOLO("yolov8n.pt")  # downloads once, then cached in ~/.cache/ultralytics/
-results = model(img_path, classes=[0], verbose=False)  # class 0 = person
-has_person = len(results[0].boxes) > 0
-```
+Both thresholds are constructor arguments and can be tuned per deployment.
 
-For environments with no internet access at all, download `yolov8n.pt` once and bundle it with the plugin, then load via `YOLO("path/to/yolov8n.pt")`.
+### Known Classifier Limitations
+
+These failure modes were identified during fixture testing and are not fixable by threshold tuning alone:
+
+- **Horizontal/submerged bodies in water** — YOLO is trained on COCO which is dominated by upright standing people. People swimming, floating, or viewed from behind in water are frequently missed.
+- **Digital illustrations and artwork** — The model is trained on photographs; illustrated people are not reliably detected.
+- **Product-shot partial bodies** — When only a hand, arm, or cropped face is visible as a prop in a product photo, YOLO may detect a person with high confidence and area despite the person not being the primary subject.
 
 ## Stash GraphQL API
 
@@ -106,14 +112,13 @@ The plugin interacts with Stash's local GraphQL endpoint at `http://HOST:PORT/gr
 
 Key operations:
 - `findImages(filter: {...})` — paginate through the image library
-- `imageUpdate(input: {...})` — apply tags to an image
+- `imageUpdate(input: {...})` — apply tags to an image; always reads existing tags first to avoid clobbering them
 - `findOrCreateTag(name: "exclude")` — get or create a tag by name
 
 Authentication uses the `SessionCookie` from the connection JSON passed via stdin.
 
 ## Project Constraints
 
-- **No internet access at runtime** — all models/detectors must work fully offline.
 - **No AI APIs** — no calls to OpenAI, Anthropic, or any token-based service. Local model inference is fine.
 - **Non-destructive** — the plugin only adds tags, never modifies or deletes image files.
 - **Stash-compatible Python** — target Python 3.9+ (3.8 is EOL as of Oct 2024).
