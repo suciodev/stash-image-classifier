@@ -8,6 +8,8 @@ A [Stash](https://github.com/stashapp/stash) plugin that classifies images using
 
 ## Development Commands
 
+### Local (Windows/Mac)
+
 ```bash
 # Install dependencies (creates .venv automatically)
 uv sync
@@ -33,6 +35,26 @@ uv add <package>
 # Run plugin manually (simulates Stash calling it)
 echo '{"server_connection":{"Scheme":"http","Host":"localhost","Port":9999},"args":{"mode":"classify"}}' | uv run python main.py
 ```
+
+### Docker (Linux dev container)
+
+```bash
+# Build the image
+docker compose build
+
+# Run tests in a Linux container
+docker compose run --rm dev uv run pytest -v
+
+# Run fixture accuracy check
+docker compose run --rm dev uv run python -m tests.check_fixtures
+
+# Open a shell in the container
+docker compose run --rm dev bash
+```
+
+**VS Code devcontainer:** open the repo and select "Reopen in Container". The `.devcontainer/devcontainer.json` configuration targets the same `dev` service, with the Python interpreter pre-pointed at `/opt/venv`.
+
+**Why the separate venv path:** the container sets `UV_PROJECT_ENVIRONMENT=/opt/venv`. This keeps the Linux venv at `/opt/venv` so the bind-mounted `/app` (which contains the Windows `.venv/`) doesn't shadow it.
 
 ## Stash Plugin Architecture
 
@@ -86,7 +108,7 @@ Progress and log lines go to **stdout** as newline-delimited JSON:
 
 Stack:
 - `ultralytics` (YOLOv8n) — person detection; model (~6MB) downloads once on first run then lives in the project root. Bundle `yolov8n.pt` alongside the plugin for fully-offline deployments.
-- `opencv-python` — image loading
+- `opencv-python-headless` — image loading (headless variant; no GUI deps, works in containers)
 - `requests` — Stash GraphQL API calls
 
 ### Detection Logic
