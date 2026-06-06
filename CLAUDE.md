@@ -112,7 +112,7 @@ Stash plugins are invoked as subprocess tasks. Stash passes JSON to the plugin v
 name: Image Classifier
 exec:
   - python
-  - main.py
+  - "{pluginDir}/main.py"
 interface: raw
 tasks:
   - name: Classify Images
@@ -123,6 +123,8 @@ hooks:
     triggeredBy:
       - Image.Create.Post
 ```
+
+**Important:** The `{pluginDir}` placeholder in `exec[1]` is required. Stash's plugin runner substitutes it with the absolute path to the plugin's directory at runtime. Without it, Stash does not prepend the plugin directory to the script argument, and the path construction falls back to a broken default that produces `//main.py`, causing a "No such file or directory" error. This is the convention used throughout CommunityScripts (e.g. `"{pluginDir}/phashDuplicateTagger.py"`).
 
 ### Plugin invocation (task)
 
@@ -290,11 +292,24 @@ Authentication uses the `SessionCookie` from the connection JSON passed via stdi
 
 The dev container previously used `stashapp/stash:v0.27` (Alpine/musl) as its base. PyTorch's manylinux wheels are built against glibc and required three separate workarounds on musl. The dev container now uses `python:3.12-slim` (Debian/glibc) with the official `stash-linux` binary, which is statically linked and runs on any x86-64 Linux kernel. All musl compatibility patches have been removed. See ADR-001.
 
+### `//main.py` — plugin exec path error
+
+**Symptom:** Stash logs `python3: can't open file '//main.py': [Errno 2] No such file or directory` when running the plugin task or hook.
+
+**Cause:** The exec list in the plugin YAML is missing the `{pluginDir}` placeholder. Stash's plugin runner only substitutes `{pluginDir}` explicitly — it does not automatically prepend the plugin directory to Python script arguments. Without it, the path construction falls back to a broken default that concatenates a bare `/` with the script name, producing `//main.py`.
+
+**Fix:** Use `"{pluginDir}/main.py"` in exec[1]:
+```yaml
+exec:
+  - python
+  - "{pluginDir}/main.py"
+```
+
 ### Stash config.yml ownership
 
-**Symptom:** Plugin manifest runs with `//main.py` as the script path (double slash), causing "no such file" errors.
+**Symptom:** `plugins_path` is empty or missing after a fresh container start, which can cause related plugin resolution failures.
 
-**Cause:** When Stash first starts with an empty config dir, it writes `/root/.stash/config.yml` owned by root. If `plugins_path` is missing or empty in that file, Stash constructs the plugin path as `"/" + "/" + "main.py"`.
+**Cause:** When Stash first starts with an empty config dir, it writes `/root/.stash/config.yml` with `plugins_path: ""`. Downstream effects include broken plugin discovery.
 
 **Fix:** `dev-infra/stash-config.yml` is a tracked file mounted as `/root/.stash/config.yml` in the container, ensuring `plugins_path: /root/.stash/plugins` is always present. See ADR-002.
 
