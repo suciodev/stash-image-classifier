@@ -1,82 +1,52 @@
 # Dev image for local plugin testing. Safe copy of the production Dockerfile.
 # Does NOT affect your stash-git image or any running containers.
 #
-# Added on top of production:
-#   - gcompat:    lets Alpine run manylinux (glibc) wheels, needed for torch
-#   - py3-opencv: OpenCV from Alpine apk (avoids compiling from source)
-#   - ultralytics: ML inference for the classifier
-#   - `python` symlink: Alpine only provides `python3`; the plugin manifest needs `python`
-#   - libgomp_stub.so + LD_PRELOAD: stubs pthread_attr_setaffinity_np missing from musl
+# Uses python:3.12-slim (Debian/glibc) instead of the upstream Alpine stash image.
+# The official stash-linux binary is statically linked (no DT_NEEDED entries),
+# so it runs on any x86-64 Linux kernel unchanged.
 #
-# Why py3-opencv via apk instead of pip?
-#   opencv-python(-headless) has no pre-built Alpine/musl wheels on PyPI. pip
-#   falls back to compiling from source, which needs cmake/ninja/gcc — not in
-#   the image. The apk package provides the same cv2 module, pre-compiled.
-#   Fake dist-infos are registered so pip resolves ultralytics' opencv dependency
-#   without downloading or building anything.
-#
-# Why the LD_PRELOAD stub?
-#   torch's bundled libgomp-*.so.1 was compiled against glibc and calls
-#   pthread_attr_setaffinity_np (a GNU extension for CPU affinity). musl doesn't
-#   provide it and gcompat doesn't stub it, so dlopen fails at import time. The
-#   stub is a no-op that satisfies the relocation so torch loads normally.
+# Switching to glibc eliminates all musl compatibility patches previously required:
+#   - no gcompat
+#   - no libgomp swap (torch ships glibc wheels; they just work)
+#   - no fake opencv dist-infos
+#   - no LD_PRELOAD / __res_init stub
+#   - no .gnu.so → .musl.so symlinks
 #
 # Build via Makefile: make start-dev
 
-FROM stashapp/stash:v0.31.1
+FROM python:3.12-slim
 
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    python3 \
-    py3-pip \
-    py3-requests \
-    py3-requests-toolbelt \
-    py3-lxml \
+    curl \
     ffmpeg \
+    libvips-tools \
     ruby \
-    tzdata \
-    vips \
-    vips-tools \
     git \
-    gcompat \
-    py3-opencv
+    tzdata \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN set -x && pip install --break-system-packages \
+# Stash binary (statically linked — no glibc/musl dependency)
+RUN curl -fsSL https://github.com/stashapp/stash/releases/download/v0.31.1/stash-linux \
+    -o /usr/local/bin/stash && chmod +x /usr/local/bin/stash
+
+RUN gem install faraday
+
+RUN pip install --no-cache-dir \
+    requests \
+    requests-toolbelt \
+    lxml \
     mechanicalsoup \
     cloudscraper \
     stashapp-tools \
     google-api-python-client \
-    Pillow && \
-    gem install faraday
-
-# Register fake dist-infos for opencv-python and opencv-python-headless so pip
-# treats both as already satisfied when resolving ultralytics' dependencies.
-RUN SITE=$(python3 -c "import sysconfig; print(sysconfig.get_path('purelib'))") && \
-    VER=$(python3 -c "import cv2; print(cv2.__version__)") && \
-    mkdir -p "$SITE/opencv_python-${VER}.dist-info" && \
-    printf "Metadata-Version: 2.1\nName: opencv-python\nVersion: %s\n" "$VER" \
-        > "$SITE/opencv_python-${VER}.dist-info/METADATA" && \
-    touch "$SITE/opencv_python-${VER}.dist-info/RECORD" && \
-    mkdir -p "$SITE/opencv_python_headless-${VER}.dist-info" && \
-    printf "Metadata-Version: 2.1\nName: opencv-python-headless\nVersion: %s\n" "$VER" \
-        > "$SITE/opencv_python_headless-${VER}.dist-info/METADATA" && \
-    touch "$SITE/opencv_python_headless-${VER}.dist-info/RECORD"
-
-# torch manylinux wheels run on Alpine via gcompat; ultralytics picks them up.
-RUN pip install --break-system-packages \
+    Pillow \
     ultralytics \
-    --extra-index-url https://download.pytorch.org/whl/cpu
+    opencv-python-headless
 
-# torch's bundled libgomp was compiled against glibc and references
-# pthread_attr_setaffinity_np, a GNU extension absent from musl/gcompat.
-# Compile a no-op stub and preload it so dlopen resolves the symbol.
-RUN apk add --no-cache --virtual .stub-build gcc musl-dev && \
-    printf 'int pthread_attr_setaffinity_np(void *a,unsigned long b,void *c){return 0;}\n' \
-        > /tmp/stub.c && \
-    gcc -shared -fPIC -o /usr/local/lib/libgomp_stub.so /tmp/stub.c && \
-    rm /tmp/stub.c && \
-    apk del .stub-build
-ENV LD_PRELOAD=/usr/local/lib/libgomp_stub.so
+# python:3.12-slim already provides /usr/local/bin/python; also add /usr/bin/python
+# so the plugin manifest (exec: python main.py) resolves under both PATH layouts.
+RUN ln -sf /usr/local/bin/python3 /usr/bin/python
 
-# Alpine's python3 package doesn't create a bare `python` symlink
-RUN ln -sf /usr/bin/python3 /usr/bin/python
+EXPOSE 9995
+ENTRYPOINT ["/usr/local/bin/stash"]
