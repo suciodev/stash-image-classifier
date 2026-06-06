@@ -98,7 +98,7 @@ echo '{"server_connection":{"Scheme":"http","Host":"localhost","Port":9999},"arg
 
 ### Dev infrastructure
 
-- `dev-infra/Dockerfile` — Alpine-based Stash image with Python + ultralytics added. See "Platform issues" below.
+- `dev-infra/Dockerfile` — Debian (python:3.12-slim) image with the official stash-linux binary + ultralytics added. See "Platform issues" below.
 - `dev-infra/docker-compose.yml` — Dev container config: port 9995, fixture mount, runtime dirs.
 - `dev-infra/stash-config.yml` — **Tracked** pre-seeded Stash config. Mounted as `/root/.stash/config.yml` inside the container to ensure `plugins_path` is set correctly. See ADR-002.
 
@@ -156,14 +156,14 @@ Progress and log lines go to **stdout** as newline-delimited JSON:
 Stash serialises the current image data and passes it to the script on **stdin**. The script writes a JSON object with fields to update on **stdout**. No `server_connection` — the scraper UI handles applying the result.
 
 ```json
-// stdin — image fragment (field names Stash sends)
-{ "files": [{"path": "/data/fixtures/...jpg"}], "tags": [...], ... }
+// stdin — image fragment (Stash sends metadata only; no file paths)
+{ "id": "42", "title": "...", "urls": [], "url": null, ... }
 
 // stdout — proposed updates
 { "tags": [{"name": "exclude"}] }
 ```
 
-`scrapers/classify.py` tries `files[].path`, then `visual_files[].path` (GraphQL shape), then `url` as fallbacks to handle any Stash version differences.
+**Important:** Stash's `imageByFragment` fragment does not include file paths. `scrapers/classify.py` resolves the path by calling back to `http://localhost:{STASH_PORT}/graphql` using `findImage(id)`. `STASH_PORT` is set by Stash as an environment variable when running the scraper.
 
 ## Classification Approach
 
@@ -203,13 +203,9 @@ Authentication uses the `SessionCookie` from the connection JSON passed via stdi
 
 ## Dev Infrastructure: Known Platform Issues
 
-### Alpine + PyTorch: missing `pthread_attr_setaffinity_np`
+### PyTorch + musl (historical — resolved)
 
-**Symptom:** `OSError: Error relocating .../torch/lib/libgomp-*.so.1: pthread_attr_setaffinity_np: symbol not found` when importing ultralytics/torch.
-
-**Cause:** PyTorch's bundled `libgomp` was compiled against glibc and references `pthread_attr_setaffinity_np` (a GNU extension for CPU affinity). Alpine's musl libc doesn't provide it, and `gcompat` doesn't stub it.
-
-**Fix:** The Dockerfile compiles a one-line no-op stub and sets `ENV LD_PRELOAD` to load it before any Python process starts. See `dev-infra/Dockerfile` and ADR-001.
+The dev container previously used `stashapp/stash:v0.27` (Alpine/musl) as its base. PyTorch's manylinux wheels are built against glibc and required three separate workarounds on musl. The dev container now uses `python:3.12-slim` (Debian/glibc) with the official `stash-linux` binary, which is statically linked and runs on any x86-64 Linux kernel. All musl compatibility patches have been removed. See ADR-001.
 
 ### Stash config.yml ownership
 
