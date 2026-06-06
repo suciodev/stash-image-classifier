@@ -35,7 +35,7 @@ Detection uses YOLOv8n: an image is considered to have a person if YOLO returns 
 See [CLAUDE.md](CLAUDE.md) for the full development guide, including:
 - Local test commands
 - Dev Stash sandbox setup (`make start-dev`, port 9995)
-- Known platform issues (Alpine + PyTorch libgomp)
+- Dev container setup and known platform notes
 - GraphQL API reference
 
 Quick start:
