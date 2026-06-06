@@ -11,7 +11,7 @@ Two problems arise from letting Stash own this file:
 
 1. **Unreadable from WSL user session**: the file is `root`-owned and readable only by root. The host user cannot read or modify it without `sudo`.
 
-2. **`plugins_path` may be empty or wrong**: Stash infers `plugins_path` from the binary's working directory when it writes the initial config. In the container, this resolves to `/`, so `plugins_path` is set to an empty string or `/`. When Stash constructs the path to run a plugin's `main.py`, it builds `plugins_path + "/" + plugin_dir + "/" + script`, yielding `//main.py` — which does not exist.
+2. **`plugins_path` may be empty or wrong**: Stash infers `plugins_path` from the binary's working directory when it writes the initial config. In the container, this can resolve to an empty string or `/`. Without a valid `plugins_path`, Stash cannot discover the plugin directory at all, so no tasks or hooks will appear in the UI.
 
 ## Decision
 
