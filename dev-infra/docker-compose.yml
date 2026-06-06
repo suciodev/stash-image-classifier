@@ -1,0 +1,34 @@
+# Dev stash instance for testing the image classifier plugin.
+# Runs on port 9995 — completely isolated from production (9999/9998/9997).
+# Stash config and runtime data live under dev-infra/ (gitignored).
+#
+# Start:  make start-dev
+# Stop:   make stop-dev
+# Logs:   make logs-dev
+
+services:
+  stash-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: stash-git-dev
+    container_name: stash-dev
+    restart: "no"
+    ports:
+      - "9995:9995"
+    environment:
+      - STASH_STASH=/data/
+      - STASH_GENERATED=/generated/
+      - STASH_METADATA=/metadata/
+      - STASH_CACHE=/cache/
+      - STASH_PORT=9995
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      # Stash config, plugins, scrapers (gitignored at runtime)
+      - ./stash-config:/root/.stash
+      # Fixture images as test data — scan /data/fixtures in the Stash UI
+      - ../tests/fixtures/person_detection:/data/fixtures
+      - ./metadata:/metadata
+      - ./cache:/cache
+      - ./generated:/generated
+      - ./blobs:/blobs

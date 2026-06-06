@@ -1,0 +1,71 @@
+DEV_PLUGIN_DIR  = dev-infra/stash-config/plugins/stash-image-classifier
+PROD_PLUGIN_DIR = /mnt/b/SteamLibrary/steamapps/shadercache/242069/O/stashdb/stash-common/plugins/stash-image-classifier
+
+# Files/dirs to exclude when syncing plugin source
+RSYNC_FLAGS = -av --delete \
+	--exclude='*.pyc' \
+	--exclude='__pycache__/' \
+	--exclude='.venv/' \
+	--exclude='tests/' \
+	--exclude='pyproject.toml' \
+	--exclude='uv.lock' \
+	--exclude='.git/' \
+	--exclude='.python-version' \
+	--exclude='Dockerfile' \
+	--exclude='docker-compose.yml' \
+	--exclude='CLAUDE.md' \
+	--exclude='Makefile' \
+	--exclude='dev-infra/' \
+	--exclude='yolov8n.pt'
+
+.PHONY: test check-fixtures \
+        deploy-dev start-dev stop-dev logs-dev rebuild-dev \
+        deploy deploy-model deploy-all
+
+# ── local tests ───────────────────────────────────────────────────────────────
+
+test:
+	uv run pytest -v
+
+check-fixtures:
+	uv run python -m tests.check_fixtures
+
+# ── dev stash instance (safe sandbox, port 9995) ──────────────────────────────
+
+deploy-dev:
+	mkdir -p "$(DEV_PLUGIN_DIR)/src"
+	rsync $(RSYNC_FLAGS) ./ "$(DEV_PLUGIN_DIR)/"
+	cp yolov8n.pt "$(DEV_PLUGIN_DIR)/yolov8n.pt"
+	@echo "Deployed → $(DEV_PLUGIN_DIR)"
+
+# Builds the dev image (first time is slow — downloads torch ~1 GB) then starts stash.
+# After first build, subsequent starts skip --build unless you run rebuild-dev.
+start-dev: deploy-dev
+	docker compose -f dev-infra/docker-compose.yml up -d --build
+	@echo "Stash dev running at http://localhost:9995"
+
+stop-dev:
+	docker compose -f dev-infra/docker-compose.yml down
+
+logs-dev:
+	docker compose -f dev-infra/docker-compose.yml logs -f stash-dev
+
+# Force a clean image rebuild (e.g. after changing dev-infra/Dockerfile)
+rebuild-dev:
+	docker compose -f dev-infra/docker-compose.yml build --no-cache
+
+# ── production deploy ─────────────────────────────────────────────────────────
+# Only run when you're ready to push to live stash-sc/hc/pro.
+# Requires rebuilding stash-git on the Windows side after the first time:
+#   docker build -t stash-git B:/SteamLibrary/steamapps/shadercache/242069/O/stashdb/
+
+deploy:
+	mkdir -p "$(PROD_PLUGIN_DIR)/src"
+	rsync $(RSYNC_FLAGS) ./ "$(PROD_PLUGIN_DIR)/"
+	@echo "Plugin deployed → $(PROD_PLUGIN_DIR)"
+
+deploy-model: deploy
+	cp yolov8n.pt "$(PROD_PLUGIN_DIR)/yolov8n.pt"
+	@echo "Model deployed → $(PROD_PLUGIN_DIR)"
+
+deploy-all: deploy-model
