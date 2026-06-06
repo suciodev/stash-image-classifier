@@ -24,8 +24,11 @@ services:
       - STASH_PORT=9995
     volumes:
       - /etc/localtime:/etc/localtime:ro
-      # Stash config, plugins, scrapers (gitignored at runtime)
+      # Stash config dir (plugins, scrapers, etc. — gitignored at runtime)
       - ./stash-config:/root/.stash
+      # Override config.yml with a tracked file so plugins_path is always correct.
+      # Without this, Stash writes plugins_path: "" which causes "//main.py" errors.
+      - ./stash-config.yml:/root/.stash/config.yml
       # Fixture images as test data — scan /data/fixtures in the Stash UI
       - ../tests/fixtures/person_detection:/data/fixtures
       - ./metadata:/metadata
