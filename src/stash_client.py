@@ -35,6 +35,26 @@ class StashClient:
         """
         return self._query(query)["findImages"]["count"]
 
+    def find_image_by_id(self, image_id: str) -> dict | None:
+        query = """
+        query FindImage($id: ID!) {
+            findImage(id: $id) {
+                id
+                visual_files {
+                    ... on ImageFile {
+                        path
+                    }
+                }
+                tags { id }
+            }
+        }
+        """
+        result = self._query(query, {"id": str(image_id)})["findImage"]
+        if not result:
+            return None
+        path = result["visual_files"][0]["path"] if result.get("visual_files") else None
+        return {"id": result["id"], "path": path, "tag_ids": [t["id"] for t in result.get("tags", [])]}
+
     def find_images(self, page: int = 1, per_page: int = 50) -> list[dict]:
         query = """
         query FindImages($filter: FindFilterType) {
@@ -78,17 +98,17 @@ class StashClient:
         """
         return self._query(query, {"input": {"name": name}})["tagCreate"]["id"]
 
-    def add_tag_to_image(self, image_id: str, tag_id: str):
+    def add_tag_to_image(self, image_id: str, tag_id: str, existing_tag_ids: list[str] | None = None):
+        if existing_tag_ids is None:
+            existing_tag_ids = self._get_image_tag_ids(image_id)
+        if tag_id in existing_tag_ids:
+            return
         query = """
         mutation ImageUpdate($input: ImageUpdateInput!) {
             imageUpdate(input: $input) { id }
         }
         """
-        # Read existing tags first to avoid clobbering them
-        existing = self._get_image_tag_ids(image_id)
-        if tag_id in existing:
-            return
-        self._query(query, {"input": {"id": image_id, "tag_ids": existing + [tag_id]}})
+        self._query(query, {"input": {"id": image_id, "tag_ids": existing_tag_ids + [tag_id]}})
 
     def _get_image_tag_ids(self, image_id: str) -> list[str]:
         query = """
