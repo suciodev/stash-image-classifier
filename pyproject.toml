@@ -2,19 +2,23 @@
 name = "stash-image-classifier"
 version = "0.1.0"
 description = "Stash plugin that classifies images using classical ML and applies tags"
-requires-python = ">=3.9"
+requires-python = ">=3.9,<3.13"
 dependencies = [
     "ultralytics>=8.0.0",
     "opencv-python-headless>=4.8.0",
     "Pillow>=10.0.0",
     "requests>=2.31.0",
     "torch>=2.0.0",
+    "torchvision>=0.15.0",
 ]
 
 # On Linux, use CPU-only torch wheels (~1 GB vs ~2.5 GB for the CUDA build).
-# torch is listed explicitly above so this source override can apply to it.
+# Both torch and torchvision must come from the same index to stay version-compatible.
 [tool.uv.sources]
 torch = [
+    { index = "pytorch-cpu", marker = "sys_platform == 'linux'" },
+]
+torchvision = [
     { index = "pytorch-cpu", marker = "sys_platform == 'linux'" },
 ]
 
@@ -23,8 +27,8 @@ name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pytest>=7.0.0",
     "mypy>=1.0.0",
     "flake8>=6.0.0",
