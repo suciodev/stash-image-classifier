@@ -1,0 +1,6 @@
+name: Image Classifier
+imageByFragment:
+  action: script
+  script:
+    - python
+    - classify.py

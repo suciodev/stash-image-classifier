@@ -23,6 +23,8 @@ def main():
 
     if mode == "classify":
         run_classify(client, classifier, args)
+    elif mode == "Image.Create.Post":
+        run_hook(client, classifier, args)
     else:
         log("error", f"Unknown mode: {mode}")
         sys.exit(1)
@@ -64,6 +66,29 @@ def run_classify(client: "StashClient", classifier: "ImageClassifier", args: dic
         page += 1
 
     log("info", f"Done. Processed {processed} images, tagged {tagged} as '{tag_name}'.")
+
+
+def run_hook(client: "StashClient", classifier: "ImageClassifier", args: dict):
+    hook_ctx = args.get("hookContext", {})
+    image_id = str(hook_ctx.get("id") or hook_ctx.get("ID", ""))
+    if not image_id:
+        log("error", "Hook fired but hookContext.id is missing")
+        sys.exit(1)
+
+    image = client.find_image_by_id(image_id)
+    if not image or not image.get("path"):
+        log("warning", f"Image {image_id} not found or has no path — skipping")
+        return
+
+    tag_name = args.get("tag_name", "exclude")
+    tag_id = client.find_or_create_tag(tag_name)
+
+    has_person = classifier.has_person(image["path"])
+    if not has_person:
+        client.add_tag_to_image(image["id"], tag_id, existing_tag_ids=image["tag_ids"])
+        log("info", f"Tagged image {image_id} as '{tag_name}' (no person detected)")
+    else:
+        log("info", f"Image {image_id} has a person — no tag applied")
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ from pathlib import Path
 from ultralytics import YOLO
 
 _PERSON_CLASS = 0  # COCO class index for "person"
+_DEFAULT_MODEL = str(Path(__file__).parent.parent / "yolov8n.pt")
 
 
 class ImageClassifier:
@@ -20,7 +21,7 @@ class ImageClassifier:
 
     def __init__(
         self,
-        model_path: str = "yolov8n.pt",
+        model_path: str = _DEFAULT_MODEL,
         min_confidence: float = 0.60,
         min_area_fraction: float = 0.05,
     ):
