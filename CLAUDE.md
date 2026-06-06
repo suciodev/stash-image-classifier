@@ -189,6 +189,89 @@ Both are constructor arguments and can be tuned per deployment.
 - **Digital illustrations and artwork** — model trained on photographs; illustrated people not reliably detected.
 - **Product-shot partial bodies** — hand, arm, or cropped face in a product photo may trigger a false positive.
 
+## Adding New Tagging Features
+
+### Architecture pattern
+
+Each new tag type maps to a new classifier class in `src/`. The existing `ImageClassifier` in `src/classifier.py` is the reference implementation — model loaded once at construction, single public method returning a bool or list of strings.
+
+The pipeline in `main.py` currently hard-wires `has_person → tag "exclude"`. As new classifiers are added, this should evolve to a multi-tag loop:
+
+```python
+# Sketch — not current code
+tags_to_apply = []
+has_person = classifier.has_person(path)
+if not has_person:
+    tags_to_apply.append("exclude")
+else:
+    tags_to_apply.extend(clothing_classifier.classify(path))  # e.g. ["bikini"]
+for tag in tags_to_apply:
+    client.add_tag_to_image(image_id, client.find_or_create_tag(tag))
+```
+
+The same pattern applies in `run_hook` (per-image hook) and `scrapers/classify.py` (per-image scraper).
+
+### Clothing tags (bikini, lingerie, underwear, etc.)
+
+**Recommended approach: CLIP zero-shot classification**
+
+CLIP compares an image against a list of text prompts and returns similarity scores. No training required — new categories are just new strings. `torch` is already a dependency, so the only addition is `transformers` (HuggingFace) or `openai-clip`.
+
+```python
+# src/clothing_classifier.py — sketch
+from transformers import CLIPProcessor, CLIPModel
+import torch
+
+_LABELS = ["bikini or swimwear", "lingerie or underwear", "fully clothed", "nude"]
+_MODEL_ID = "openai/clip-vit-base-patch32"   # ~600 MB, runs CPU-only
+
+class ClothingClassifier:
+    def __init__(self):
+        self.model = CLIPModel.from_pretrained(_MODEL_ID)
+        self.processor = CLIPProcessor.from_pretrained(_MODEL_ID)
+
+    def classify(self, image_path: str) -> list[str]:
+        """Returns tag names to apply (empty list = no clothing tag)."""
+        from PIL import Image
+        image = Image.open(image_path).convert("RGB")
+        inputs = self.processor(text=_LABELS, images=image, return_tensors="pt", padding=True)
+        with torch.no_grad():
+            logits = self.model(**inputs).logits_per_image[0]
+        probs = logits.softmax(dim=0)
+        best_idx = probs.argmax().item()
+        best_label = _LABELS[best_idx]
+        if probs[best_idx] < 0.5:          # not confident enough
+            return []
+        if "bikini" in best_label or "swimwear" in best_label:
+            return ["bikini"]
+        if "lingerie" in best_label or "underwear" in best_label:
+            return ["lingerie"]
+        return []
+```
+
+**Key design decisions:**
+
+- **Gate on person detection first.** Only run clothing classification when `has_person` is True — otherwise you'd tag an empty bikini on a hanger.
+- **Prompt wording matters more than threshold tuning.** CLIP is sensitive to phrasing; test against fixtures before shipping. "a woman in a bikini" beats "bikini" as a prompt.
+- **Model file handling.** CLIP downloads on first use via HuggingFace; for offline deployments, pre-download with `model.save_pretrained("./clip-vit-b32")` and load from that local path. Follow the same pattern as `yolov8n.pt` — bundle alongside the plugin.
+- **Confidence threshold.** Start at 0.5 and tune downward using `tests/check_fixtures.py`-style validation against labelled examples before lowering.
+
+**Alternative: attribute detection with a fashion YOLO model**
+
+If CLIP accuracy is insufficient (e.g. pool scenes where swimwear vs. nude is ambiguous), consider a model fine-tuned on DeepFashion2. These exist as pre-trained YOLO checkpoints and would slot into `ImageClassifier`'s pattern with a different class list. Trade-off: less flexible (fixed label set), more accurate per-category.
+
+### Adding fixtures for a new classifier
+
+Add labelled samples under `tests/fixtures/<feature>/`:
+```
+tests/fixtures/clothing/
+    bikini/       person_bikini_beach_01.jpg ...
+    lingerie/     person_lingerie_studio_01.jpg ...
+    clothed/      person_jeans_street_01.jpg ...
+```
+
+Then extend `tests/check_fixtures.py` with a validation loop for the new classifier, following the same pattern as the person detection check. Run with `uv run python -m tests.check_fixtures` before committing thresholds.
+
 ## Stash GraphQL API
 
 The plugin interacts with Stash's local GraphQL endpoint at `http://HOST:PORT/graphql`.
