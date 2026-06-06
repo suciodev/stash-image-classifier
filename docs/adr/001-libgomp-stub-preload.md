@@ -1,41 +1,45 @@
-# ADR-001: LD_PRELOAD stub for missing pthread_attr_setaffinity_np
+# ADR-001: Switch dev container base image from Alpine to Debian (python:3.12-slim)
 
-**Status:** Accepted  
-**Date:** 2026-06-06
+**Status:** Superseded  
+**Date:** 2026-06-06 (updated)  
+**Original decision:** Replace torch's bundled libgomp with Alpine's musl-native version
 
 ## Context
 
-The dev Stash container is Alpine Linux (musl libc). PyTorch's manylinux wheel bundles its own `libgomp-<hash>.so.1` (OpenMP runtime) compiled against glibc. That library references `pthread_attr_setaffinity_np`, a GNU extension used to pin OpenMP worker threads to specific CPUs.
+The dev Stash container originally used `stashapp/stash:v0.31.1` (Alpine/musl) as its base image. PyTorch and ultralytics ship manylinux (glibc) wheels. On Alpine/musl this caused a cascade of compatibility failures:
 
-Alpine's musl libc does not implement this function. The `gcompat` package provides a glibc shim layer, but does not stub `pthread_attr_setaffinity_np`. Result: importing `torch` or `ultralytics` raises:
+1. **libgomp missing symbols** — torch's bundled `libgomp-*.so.1` references `pthread_attr_setaffinity_np`, `__strdup`, and other glibc extensions absent from musl. Fix: swap libgomp with Alpine's musl-native version.
+2. **`__res_init` missing** — `libtorch_cpu.so` calls `__res_init` (glibc DNS init), absent from musl. Fix: compile an LD_PRELOAD stub.
+3. **`.gnu.so` extension ignored** — musl Python's `EXTENSION_SUFFIXES` excludes `*-linux-gnu.so`. Torch ships `_C.cpython-312-x86_64-linux-gnu.so`; Python falls through to a namespace stub dir. Fix: symlink every `*-linux-gnu.so` to `*-linux-musl.so`.
 
-```
-OSError: Error relocating .../torch/lib/libgomp-a34b3233.so.1:
-    pthread_attr_setaffinity_np: symbol not found
-```
-
-This happens at `dlopen` time — before any Python code runs — so Python-level workarounds (env vars, `torch.set_num_threads`, etc.) cannot intercept it.
+Each layer required a separate workaround, and new layers could appear with any PyTorch upgrade. This is whack-a-mole against a bounded-but-unknown number of glibc symbols.
 
 ## Decision
 
-Compile a minimal shared library containing a no-op stub:
+Rebase the dev image on `python:3.12-slim` (Debian/glibc) and download the official `stash-linux` binary from GitHub releases. The binary has **no `DT_NEEDED` entries** (verified via ELF program header inspection): it is statically linked and runs on any x86-64 Linux kernel regardless of libc.
 
-```c
-int pthread_attr_setaffinity_np(void *a, unsigned long b, void *c) { return 0; }
-```
+This eliminates the entire compatibility problem class:
 
-and set `ENV LD_PRELOAD=/usr/local/lib/libgomp_stub.so` in the Dockerfile so the stub is loaded into every process at startup, making the symbol available in the global symbol table before `libgomp` attempts to resolve it.
+| Patch removed | Why no longer needed |
+|---|---|
+| `apk add gcompat` | glibc is native on Debian |
+| libgomp swap | torch's bundled libgomp targets glibc — it just works |
+| fake opencv dist-infos | glibc opencv wheels install from PyPI normally |
+| `__res_init` LD_PRELOAD stub | musl-only issue; glibc has `__res_init` |
+| `.gnu.so` → `.musl.so` symlinks | Python on glibc accepts `-linux-gnu.so` natively |
+
+The Dockerfile went from ~87 lines with multiple workaround layers to ~35 lines of straightforward installs.
 
 ## Alternatives considered
 
-**Replace torch's bundled libgomp with Alpine's system libgomp** (`apk add libgomp; cp /usr/lib/libgomp.so.1 <torch-lib-path>/libgomp-*.so.1`): works, but the SONAME mismatch and potential ABI differences between GCC versions make this fragile across PyTorch updates.
+**Continue musl patching**: Had already surfaced three distinct incompatibility layers. No upper bound on future layers; risk of silent glibc-specific behavior at inference time even if `import torch` succeeds.
 
-**patchelf to remove the symbol dependency**: requires patchelf in the image and is brittle across PyTorch wheel rebuilds that produce new libgomp file names.
+**Alpine base + static torch build**: No static PyPI wheels for torch; building from source is hours of compile time and not viable in a dev image.
 
-**glibc-based base image** (e.g. Debian slim): would eliminate all Alpine/musl compatibility issues, but the production Stash image is Alpine-based, and we want the dev image to match production as closely as possible.
+**Sidecar inference container (glibc)**: Stash invokes plugins as subprocesses within its own container, so a separate inference container would require refactoring the plugin into an HTTP client — more work than a base-image swap.
 
 ## Consequences
 
-- The stub returns 0 (success) for all calls to `pthread_attr_setaffinity_np`. In practice this means OpenMP worker threads will not be pinned to specific CPUs. For single-image ML inference this has no meaningful performance impact.
-- `LD_PRELOAD` applies to all processes in the container, including Stash itself (a Go binary). Go does not use this function, so there is no risk of behavioural change in Stash.
-- If PyTorch is upgraded and the new wheel no longer bundles a glibc-linked libgomp (e.g. if a musl wheel becomes available), the stub remains harmless.
+- Dev image no longer matches the production Stash container (Alpine). The stash binary and Python runtime differ, but plugin code (`main.py`, `src/`) is platform-agnostic Python and runs identically.
+- torch, ultralytics, and opencv now install as standard PyPI wheels with no modifications — upgrades are straightforward.
+- Image size is comparable: Debian slim + pip installs vs Alpine + gcompat + workarounds.

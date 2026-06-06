@@ -19,7 +19,7 @@ RSYNC_FLAGS = -av --delete \
 	--exclude='dev-infra/' \
 	--exclude='yolov8n.pt'
 
-.PHONY: test check-fixtures \
+.PHONY: test check-fixtures test-scraper-dev \
         deploy-dev deploy-scraper-dev start-dev stop-dev logs-dev rebuild-dev \
         deploy deploy-scraper deploy-model deploy-all
 
@@ -30,6 +30,11 @@ test:
 
 check-fixtures:
 	uv run python -m tests.check_fixtures
+
+# Run the imageByFragment scraper end-to-end via the Stash GraphQL API.
+# Requires: dev container running (make start-dev) with fixture images scanned.
+test-scraper-dev:
+	uv run python -m tests.test_scraper_e2e
 
 # ── dev stash instance (safe sandbox, port 9995) ──────────────────────────────
 
