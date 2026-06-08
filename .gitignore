@@ -1,3 +1,5 @@
+tests/fixtures/
+*.pt
 __pycache__/
 *.pyc
 *.pyo
@@ -8,3 +10,10 @@ venv/
 dist/
 *.egg-info/
 .env
+
+# dev-infra runtime data (Dockerfile and docker-compose.yml are tracked)
+dev-infra/stash-config/
+dev-infra/metadata/
+dev-infra/cache/
+dev-infra/generated/
+dev-infra/blobs/

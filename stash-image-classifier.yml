@@ -1,15 +1,20 @@
 name: Image Classifier
-description: Classifies images using classical ML and applies tags. Detects images without people and tags them as 'exclude'.
+description: Classifies images using local ML inference and auto-applies tags. Detects images without people and tags them as 'exclude'.
 url: https://github.com/suciodev/stash-image-classifier
-version: 0.1.0
+version: 0.2.0
 exec:
   - python
-  - main.py
+  - "{pluginDir}/main.py"
 interface: raw
 tasks:
   - name: Classify Images
-    description: Scan images and tag those without people as 'exclude'
+    description: Scan all images and tag those without a person as 'exclude'
     defaultArgs:
       mode: classify
       tag_name: exclude
       batch_size: 50
+hooks:
+  - name: Auto-classify on scan
+    description: Classify each image as it is scanned into the library and auto-apply the exclude tag if no person is detected
+    triggeredBy:
+      - Image.Create.Post
