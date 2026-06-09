@@ -44,13 +44,13 @@ class NsfwClassifier:
     Known limitations:
       - Accuracy drops for artistic/illustrated content (model trained on photos).
       - Partial bodies in unusual orientations (swimmers, extreme crops) may be missed.
-      - min_confidence of 0.33 favours recall; raise it if false positives appear on
+      - min_confidence of 0.25 favours recall; raise it if false positives appear on
         clothed subjects in your library.
     """
 
     def __init__(
         self,
-        min_confidence: float = 0.33,
+        min_confidence: float = 0.25,
         model_path: str | None = None,
         label_map: dict[str, str] | None = None,
     ):
