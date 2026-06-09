@@ -56,3 +56,17 @@ def test_add_tag_to_image_appends_new_tag(client):
     with patch.object(client.session, "post", side_effect=responses) as mock_post:
         client.add_tag_to_image("img-1", "new-tag")
         assert mock_post.call_count == 2
+
+
+def test_update_image_tags_removes_tag(client):
+    with patch.object(client.session, "post", return_value=_mock_response({"imageUpdate": {"id": "img-1"}})) as mock_post:
+        client.update_image_tags("img-1", [], ["stale-tag"], ["stale-tag", "keep-tag"])
+        assert mock_post.call_count == 1
+        sent = mock_post.call_args[1]["json"]["variables"]["input"]["tag_ids"]
+        assert sent == ["keep-tag"]
+
+
+def test_update_image_tags_noop_when_unchanged(client):
+    with patch.object(client.session, "post") as mock_post:
+        client.update_image_tags("img-1", ["existing"], [], ["existing"])
+        mock_post.assert_not_called()

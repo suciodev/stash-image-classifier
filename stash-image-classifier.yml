@@ -1,20 +1,31 @@
 name: Image Classifier
-description: Classifies images using local ML inference and auto-applies tags. Detects images without people and tags them as 'exclude'.
+description: Classifies images using local ML inference. Applies exclude/NSFW severity tags (explicit, revealing, suggestive) based on person detection (YOLOv8) and body-part detection (NudeNet).
 url: https://github.com/suciodev/stash-image-classifier
-version: 0.2.0
+version: 0.3.0
 exec:
   - python
   - "{pluginDir}/main.py"
 interface: raw
 tasks:
-  - name: Classify Images
-    description: Scan all images and tag those without a person as 'exclude'
+  - name: Classify All Images
+    description: Classify every image in the library. Applies exclude or NSFW severity tags. Removes stale 'exclude' tags from images now detected as having a person or NSFW content.
     defaultArgs:
       mode: classify
-      tag_name: exclude
       batch_size: 50
+  - name: Classify Untagged Images
+    description: Same as above but skips images that already carry any classifier tag (exclude, explicit, revealing, suggestive). Safe to re-run after adding new images.
+    defaultArgs:
+      mode: classify
+      batch_size: 50
+      skip_tagged: true
+  - name: Recheck Exclude-Tagged Images
+    description: Re-classifies images currently tagged only with 'exclude', skipping images that already carry an NSFW severity tag. Useful after threshold tuning to catch potential mis-tags.
+    defaultArgs:
+      mode: classify
+      batch_size: 50
+      recheck_exclude: true
 hooks:
   - name: Auto-classify on scan
-    description: Classify each image as it is scanned into the library and auto-apply the exclude tag if no person is detected
+    description: Classify each image as it is scanned and apply exclude if no person or NSFW content is detected.
     triggeredBy:
       - Image.Create.Post

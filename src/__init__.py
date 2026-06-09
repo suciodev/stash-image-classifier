@@ -1,12 +1,19 @@
 import sys
-import json
+
+_LEVEL_CHARS = {
+    "trace": "t",
+    "debug": "d",
+    "info": "i",
+    "warning": "w",
+    "warn": "w",
+    "error": "e",
+}
 
 
 def log(level: str, message: str):
-    """Emit a log line to stdout in the Stash plugin protocol format."""
-    print(json.dumps({"type": level.capitalize(), "message": message}), flush=True)
+    char = _LEVEL_CHARS.get(level.lower(), "i")
+    print(f"\x01{char}\x02{message}", file=sys.stderr, flush=True)
 
 
 def progress(value: float):
-    """Emit a progress update (0.0–1.0) to stdout."""
-    print(json.dumps({"progress": round(value, 4)}), flush=True)
+    print(f"\x01p\x02{round(value, 4)}", file=sys.stderr, flush=True)

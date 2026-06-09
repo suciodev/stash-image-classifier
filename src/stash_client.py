@@ -66,12 +66,21 @@ class StashClient:
                             path
                         }
                     }
+                    tags { id }
                 }
             }
         }
         """
         variables = {"filter": {"page": page, "per_page": per_page}}
-        return self._query(query, variables)["findImages"]["images"]
+        raw = self._query(query, variables)["findImages"]["images"]
+        return [
+            {
+                "id": img["id"],
+                "path": img["visual_files"][0]["path"] if img.get("visual_files") else None,
+                "tag_ids": [t["id"] for t in img.get("tags", [])],
+            }
+            for img in raw
+        ]
 
     def find_or_create_tag(self, name: str) -> str:
         tag_id = self._find_tag(name)
@@ -98,17 +107,32 @@ class StashClient:
         """
         return self._query(query, {"input": {"name": name}})["tagCreate"]["id"]
 
-    def add_tag_to_image(self, image_id: str, tag_id: str, existing_tag_ids: list[str] | None = None):
-        if existing_tag_ids is None:
-            existing_tag_ids = self._get_image_tag_ids(image_id)
-        if tag_id in existing_tag_ids:
+    def update_image_tags(
+        self,
+        image_id: str,
+        add_tag_ids: list[str],
+        remove_tag_ids: list[str],
+        existing_tag_ids: list[str],
+    ):
+        """Atomically add and remove tags in a single imageUpdate call."""
+        remove_set = set(remove_tag_ids)
+        final_ids = [tid for tid in existing_tag_ids if tid not in remove_set]
+        for tid in add_tag_ids:
+            if tid not in final_ids:
+                final_ids.append(tid)
+        if set(final_ids) == set(existing_tag_ids):
             return
         query = """
         mutation ImageUpdate($input: ImageUpdateInput!) {
             imageUpdate(input: $input) { id }
         }
         """
-        self._query(query, {"input": {"id": image_id, "tag_ids": existing_tag_ids + [tag_id]}})
+        self._query(query, {"input": {"id": image_id, "tag_ids": final_ids}})
+
+    def add_tag_to_image(self, image_id: str, tag_id: str, existing_tag_ids: list[str] | None = None):
+        if existing_tag_ids is None:
+            existing_tag_ids = self._get_image_tag_ids(image_id)
+        self.update_image_tags(image_id, [tag_id], [], existing_tag_ids)
 
     def _get_image_tag_ids(self, image_id: str) -> list[str]:
         query = """

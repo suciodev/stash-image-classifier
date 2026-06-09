@@ -1,9 +1,14 @@
 import sys
 import json
+from pathlib import Path
 
 from src.classifier import ImageClassifier
+from src.nsfw_classifier import NsfwClassifier
 from src.stash_client import StashClient
 from src import log, progress
+
+# Tags managed by this classifier. Used to detect already-classified images.
+_CLASSIFIER_TAGS = ("exclude", "explicit", "revealing", "suggestive")
 
 
 def main():
@@ -20,28 +25,60 @@ def main():
 
     client = StashClient(server)
     classifier = ImageClassifier()
+    nsfw_classifier = NsfwClassifier()
 
     if mode == "classify":
-        run_classify(client, classifier, args)
+        run_classify(client, classifier, nsfw_classifier, args)
     elif mode == "Image.Create.Post":
-        run_hook(client, classifier, args)
+        run_hook(client, classifier, nsfw_classifier, args)
     else:
         log("error", f"Unknown mode: {mode}")
         sys.exit(1)
 
 
-def run_classify(client: "StashClient", classifier: "ImageClassifier", args: dict):
-    tag_name = args.get("tag_name", "exclude")
-    batch_size = int(args.get("batch_size", 50))
+def _classify_image(path: str, classifier: ImageClassifier, nsfw_classifier: NsfwClassifier, exclude_tag: str) -> list[str]:
+    """
+    Returns the list of tag names to apply to an image.
 
-    tag_id = client.find_or_create_tag(tag_name)
-    log("info", f"Using tag '{tag_name}' (id={tag_id})")
+    NSFW classification runs unconditionally — needed to catch explicit images
+    that YOLO misses (unusual poses not in COCO training data).
+    """
+    has_person = classifier.has_person(path)
+    nsfw_tags = nsfw_classifier.classify(path)
+    if nsfw_tags:
+        return nsfw_tags
+    if not has_person:
+        return [exclude_tag]
+    return []
+
+
+def run_classify(client: "StashClient", classifier: "ImageClassifier", nsfw_classifier: "NsfwClassifier", args: dict):
+    exclude_tag_name = args.get("tag_name", "exclude")
+    batch_size = int(args.get("batch_size", 50))
+    skip_tagged = str(args.get("skip_tagged", "false")).lower() == "true"
+    recheck_exclude = str(args.get("recheck_exclude", "false")).lower() == "true"
+
+    # Pre-resolve all tag IDs managed by this classifier.
+    tag_ids: dict[str, str] = {name: client.find_or_create_tag(name) for name in _CLASSIFIER_TAGS}
+    if exclude_tag_name not in tag_ids:
+        tag_ids[exclude_tag_name] = client.find_or_create_tag(exclude_tag_name)
+    classifier_tag_id_set = set(tag_ids.values())
+    nsfw_severity_tag_id_set = {tag_ids[n] for n in ("explicit", "revealing", "suggestive") if n in tag_ids}
 
     total = client.count_images()
-    log("info", f"Found {total} images to process")
+    if skip_tagged:
+        mode_label = "untagged images"
+    elif recheck_exclude:
+        mode_label = "exclude-tagged and untagged images"
+    else:
+        mode_label = "all images"
+    log("info", f"Starting classification of {mode_label} — {total} images in library")
+    progress(0.0)
 
     processed = 0
     tagged = 0
+    cleaned = 0
+    skipped = 0
     page = 1
 
     while processed < total:
@@ -50,25 +87,69 @@ def run_classify(client: "StashClient", classifier: "ImageClassifier", args: dic
             break
 
         for image in images:
-            image_path = image.get("path") or image.get("visual_files", [{}])[0].get("path")
-            if not image_path:
+            image_path = image.get("path")
+            existing_tag_ids: list[str] = image.get("tag_ids", [])
+            filename = Path(image_path).name if image_path else f"id={image['id']}"
+
+            if skip_tagged and classifier_tag_id_set.intersection(existing_tag_ids):
+                skipped += 1
                 processed += 1
+                progress(processed / total)
                 continue
 
-            has_person = classifier.has_person(image_path)
-            if not has_person:
-                client.add_tag_to_image(image["id"], tag_id)
-                tagged += 1
+            if recheck_exclude and nsfw_severity_tag_id_set.intersection(existing_tag_ids):
+                skipped += 1
+                processed += 1
+                progress(processed / total)
+                continue
+
+            if not image_path:
+                log("warning", f"{filename} — no path, skipping")
+                processed += 1
+                progress(processed / total)
+                continue
+
+            desired_tag_names = _classify_image(image_path, classifier, nsfw_classifier, exclude_tag_name)
+            desired_tag_ids = [tag_ids[n] for n in desired_tag_names if n in tag_ids]
+
+            # Remove stale 'exclude' if the image now has a person or NSFW content.
+            exclude_tag_id = tag_ids[exclude_tag_name]
+            stale_exclude = (
+                exclude_tag_id in existing_tag_ids
+                and exclude_tag_id not in desired_tag_ids
+            )
+            remove_ids = [exclude_tag_id] if stale_exclude else []
+
+            if desired_tag_ids or remove_ids:
+                client.update_image_tags(image["id"], desired_tag_ids, remove_ids, existing_tag_ids)
+
+            added_names = [n for n in desired_tag_names if tag_ids.get(n) not in existing_tag_ids]
+            if added_names or stale_exclude:
+                parts = []
+                if added_names:
+                    parts.append(f"added: {', '.join(added_names)}")
+                if stale_exclude:
+                    parts.append("removed stale: exclude")
+                    cleaned += 1
+                log("info", f"{filename} — {'; '.join(parts)}")
+                tagged += len(added_names)
+            else:
+                log("info", f"{filename} — no change ({', '.join(desired_tag_names) or 'clean'})")
 
             processed += 1
             progress(processed / total)
 
         page += 1
 
-    log("info", f"Done. Processed {processed} images, tagged {tagged} as '{tag_name}'.")
+    summary = f"Done — {processed} processed, {tagged} tags added"
+    if cleaned:
+        summary += f", {cleaned} stale 'exclude' removed"
+    if skipped:
+        summary += f", {skipped} skipped (already tagged)"
+    log("info", summary)
 
 
-def run_hook(client: "StashClient", classifier: "ImageClassifier", args: dict):
+def run_hook(client: "StashClient", classifier: "ImageClassifier", nsfw_classifier: "NsfwClassifier", args: dict):
     hook_ctx = args.get("hookContext", {})
     image_id = str(hook_ctx.get("id") or hook_ctx.get("ID", ""))
     if not image_id:
@@ -80,15 +161,17 @@ def run_hook(client: "StashClient", classifier: "ImageClassifier", args: dict):
         log("warning", f"Image {image_id} not found or has no path — skipping")
         return
 
-    tag_name = args.get("tag_name", "exclude")
-    tag_id = client.find_or_create_tag(tag_name)
+    exclude_tag_name = args.get("tag_name", "exclude")
+    exclude_tag_id = client.find_or_create_tag(exclude_tag_name)
 
     has_person = classifier.has_person(image["path"])
-    if not has_person:
-        client.add_tag_to_image(image["id"], tag_id, existing_tag_ids=image["tag_ids"])
-        log("info", f"Tagged image {image_id} as '{tag_name}' (no person detected)")
+    is_nsfw = bool(nsfw_classifier.classify(image["path"])) if not has_person else False
+    if not has_person and not is_nsfw:
+        client.add_tag_to_image(image["id"], exclude_tag_id, existing_tag_ids=image["tag_ids"])
+        log("info", f"Image {image_id} — tagged '{exclude_tag_name}' (no person or NSFW detected)")
     else:
-        log("info", f"Image {image_id} has a person — no tag applied")
+        reason = "person detected" if has_person else "NSFW detected"
+        log("info", f"Image {image_id} — no tag applied ({reason})")
 
 
 if __name__ == "__main__":
