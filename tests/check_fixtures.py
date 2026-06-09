@@ -1,6 +1,9 @@
-"""Quick accuracy check against fixture images. Run with: uv run python tests/check_fixtures.py"""
-from src.classifier import ImageClassifier
+"""Quick accuracy check against fixture images. Run with: uv run python -m tests.check_fixtures"""
 from pathlib import Path
+from src.classifier import ImageClassifier
+from src.nsfw_classifier import NsfwClassifier
+
+# ── Person detection ──────────────────────────────────────────────────────────
 
 clf = ImageClassifier()
 base = Path("tests/fixtures/person_detection")
@@ -18,4 +21,32 @@ for label in ("include", "exclude"):
         total += 1
         correct += ok
 
-print(f"\nResult: {correct}/{total} correct ({100*correct//total}%)")
+print(f"\nPerson result: {correct}/{total} correct ({100*correct//total}%)")
+
+# ── NSFW detection ────────────────────────────────────────────────────────────
+
+nsfw_clf = NsfwClassifier()
+nsfw_base = Path("tests/fixtures/nsfw")
+
+nsfw_total = nsfw_correct = 0
+
+# Subdirs: explicit/, revealing/, suggestive/ → expect those tags
+# Subdirs: clean/ → expect empty list
+for label in ("explicit", "revealing", "suggestive", "clean"):
+    fixture_dir = nsfw_base / label
+    if not fixture_dir.exists():
+        continue
+    expect_tag = label if label != "clean" else None
+    print(f"\n--- NSFW {label.upper()} (expect tag={expect_tag!r}) ---")
+    for img in sorted(fixture_dir.iterdir()):
+        tags = nsfw_clf.classify(str(img))
+        ok = (expect_tag in tags) if expect_tag else (tags == [])
+        status = "OK   " if ok else "WRONG"
+        print(f"  [{status}] tags={tags or '(none)'}  {img.name[:60]}")
+        nsfw_total += 1
+        nsfw_correct += ok
+
+if nsfw_total:
+    print(f"\nNSFW result: {nsfw_correct}/{nsfw_total} correct ({100*nsfw_correct//nsfw_total}%)")
+else:
+    print("\nNSFW result: no fixtures found — add images to tests/fixtures/nsfw/{explicit,revealing,suggestive,clean}/")
