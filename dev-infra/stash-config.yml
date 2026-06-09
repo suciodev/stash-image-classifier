@@ -36,8 +36,62 @@ show_one_time_moved_notification: true
 sound_on_preview: false
 sprite_interval: 30
 sprite_screenshot_width: 160
+stash:
+    - path: data/fixtures
+      excludevideo: false
+      excludeimage: false
 theme_color: '#202b33'
 ui:
+    frontPageContent:
+        - __typename: CustomFilter
+          direction: DESC
+          message:
+            id: recently_released_objects
+            values:
+                objects: Scenes
+          mode: SCENES
+          sortBy: date
+        - __typename: CustomFilter
+          direction: DESC
+          message:
+            id: recently_added_objects
+            values:
+                objects: Studios
+          mode: STUDIOS
+          sortBy: created_at
+        - __typename: CustomFilter
+          direction: DESC
+          message:
+            id: recently_released_objects
+            values:
+                objects: Groups
+          mode: GROUPS
+          sortBy: date
+        - __typename: CustomFilter
+          direction: DESC
+          message:
+            id: recently_added_objects
+            values:
+                objects: Performers
+          mode: PERFORMERS
+          sortBy: created_at
+        - __typename: CustomFilter
+          direction: DESC
+          message:
+            id: recently_released_objects
+            values:
+                objects: Galleries
+          mode: GALLERIES
+          sortBy: date
     lastNoteSeen: 20251026
+    taskDefaults:
+        scan:
+            scanGenerateClipPreviews: false
+            scanGenerateCovers: true
+            scanGenerateImagePreviews: false
+            scanGeneratePhashes: false
+            scanGeneratePreviews: false
+            scanGenerateSprites: false
+            scanGenerateThumbnails: true
 use_custom_sprite_interval: false
 write_image_thumbnails: true
