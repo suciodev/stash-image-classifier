@@ -10,10 +10,17 @@ base = Path("tests/fixtures/person_detection")
 
 total = correct = 0
 
+_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
+
+
+def _images(directory: Path):
+    return sorted(p for p in directory.iterdir() if p.suffix.lower() in _IMAGE_SUFFIXES)
+
+
 for label in ("include", "exclude"):
     expect_person = label == "include"
     print(f"\n--- {label.upper()} (expect has_person={expect_person}) ---")
-    for img in sorted((base / label).iterdir()):
+    for img in _images(base / label):
         result = clf.has_person(str(img))
         ok = result == expect_person
         status = "OK   " if ok else "WRONG"
@@ -38,7 +45,7 @@ for label in ("explicit", "revealing", "suggestive", "clean"):
         continue
     expect_tag = label if label != "clean" else None
     print(f"\n--- NSFW {label.upper()} (expect tag={expect_tag!r}) ---")
-    for img in sorted(fixture_dir.iterdir()):
+    for img in _images(fixture_dir):
         tags = nsfw_clf.classify(str(img))
         ok = (expect_tag in tags) if expect_tag else (tags == [])
         status = "OK   " if ok else "WRONG"
