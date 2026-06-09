@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from nudenet import NudeDetector
 
+_DEFAULT_MODEL = Path(__file__).parent.parent / "640m.onnx"
+
 # NudeNet v3 body-part label → severity tag.
 # Absent entries produce no tag.  Override at construction to remap labels,
 # collapse tiers (e.g. all → "nsfw"), or adapt to a future model version.
@@ -42,16 +44,18 @@ class NsfwClassifier:
     Known limitations:
       - Accuracy drops for artistic/illustrated content (model trained on photos).
       - Partial bodies in unusual orientations (swimmers, extreme crops) may be missed.
-      - min_confidence of 0.45 is intentionally permissive; tune down with fixtures
-        if false positives are seen on swimwear or sports content.
+      - min_confidence of 0.33 favours recall; raise it if false positives appear on
+        clothed subjects in your library.
     """
 
     def __init__(
         self,
-        min_confidence: float = 0.45,
+        min_confidence: float = 0.33,
+        model_path: str | None = None,
         label_map: dict[str, str] | None = None,
     ):
-        self.detector = NudeDetector()
+        resolved = model_path or str(_DEFAULT_MODEL)
+        self.detector = NudeDetector(model_path=resolved, inference_resolution=640)
         self.min_confidence = min_confidence
         self.label_map = label_map if label_map is not None else dict(_DEFAULT_LABEL_MAP)
 
