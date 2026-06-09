@@ -6,12 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A [Stash](https://github.com/stashapp/stash) plugin that classifies images using local ML inference and auto-applies tags. The initial use case: tag images where no person is the main subject with an "exclude" label, targeting Instagram media libraries.
 
-The plugin ships two integration points:
-1. **Bulk task** (`mode: classify`) — processes all images in a Stash library, run from the Tasks panel.
+The plugin ships three integration points:
+1. **Bulk task** (`mode: classify`) — processes all images in a Stash library, run from the Tasks panel. Supports three variants: Classify All Images, Classify Untagged Images, and Recheck Exclude-Tagged Images.
 2. **Auto-hook** (`Image.Create.Post`) — classifies each image as it is scanned into the library.
 3. **Per-image scraper** (`imageByFragment`) — exposed in the image edit dialog; classifies one image on demand and proposes tags for the user to confirm.
 
-**Current staging note:** NSFW classification (`NsfwClassifier`) is wired into the scraper only (branch `feature/nsfw-classifier`). The bulk task and auto-hook still apply only the `exclude` tag. Extending `main.py` to run `NsfwClassifier` is the next planned step — see "Adding New Tagging Features" below for the multi-tag loop sketch.
+Tags applied: `exclude` (no person, no NSFW content), `explicit`, `revealing`, `suggestive` (NSFW severity tiers from NudeNet body-part detection).
 
 ## Development Commands
 
@@ -151,11 +151,15 @@ hooks:
 }
 ```
 
-Progress and log lines go to **stdout** as newline-delimited JSON:
+Progress and log lines go to **stderr** using Stash's character-prefix protocol:
 ```
-{"progress": 0.5}
-{"type": "Info", "message": "Processing image 1 of 100"}
+\x01p\x020.5                            # progress (float 0.0–1.0)
+\x01i\x02Processing image 1 of 100      # info log
+\x01e\x02Something went wrong           # error log
 ```
+Level chars: `t`=trace, `d`=debug, `i`=info, `w`=warning, `e`=error, `p`=progress.
+
+The `raw` interface reads all of **stdout** at once after the plugin exits and expects either a single JSON `PluginOutput` blob or plain text. Do not write structured per-line events to stdout.
 
 ### Scraper invocation (imageByFragment)
 
@@ -177,23 +181,36 @@ Stash serialises the current image data and passes it to the script on **stdin**
 
 Stack:
 - `ultralytics` (YOLOv8n) — person detection; `yolov8n.pt` (~6 MB) is bundled alongside the plugin for fully-offline deployments.
+- `nudenet` (NudeNet v3, 640m ONNX) — NSFW body-part detection; `640m.onnx` (~18 MB) is bundled alongside the plugin.
 - `opencv-python-headless` — image loading (headless; no GUI deps)
 - `requests` — Stash GraphQL API calls
 
 ### Detection thresholds
 
-`ImageClassifier` uses two thresholds:
+`ImageClassifier` (YOLOv8n) uses two thresholds:
 
 - **`min_confidence` (default 0.60)** — passed directly to YOLO; filters low-confidence partial detections (blurred limbs, reflections).
 - **`min_area_fraction` (default 0.05)** — post-inference; a box must cover ≥5% of image area to count. Filters small background figures.
 
-Both are constructor arguments and can be tuned per deployment.
+`NsfwClassifier` (NudeNet 640m) uses one threshold:
+
+- **`min_confidence` (default 0.25)** — minimum body-part detection score to count a detection. Lower values improve recall; raise if you see false positives on clothed subjects.
+
+### NSFW classification pipeline
+
+NsfwClassifier runs **unconditionally** (not gated on YOLO), because YOLOv8 misses people in unusual explicit poses (trained on COCO, not adult content). When any NSFW body parts are detected above threshold, NSFW severity tags take precedence and the `exclude` tag is not applied.
+
+Tag mapping (NudeNet label → Stash tag):
+- `FEMALE_GENITALIA_EXPOSED`, `MALE_GENITALIA_EXPOSED`, `ANUS_EXPOSED` → `explicit`
+- `FEMALE_BREAST_EXPOSED`, `BUTTOCKS_EXPOSED` → `revealing`
+- `FEMALE_BREAST_COVERED`, `FEMALE_GENITALIA_COVERED`, `BUTTOCKS_COVERED` → `suggestive`
 
 ### Known classifier limitations
 
-- **Horizontal/submerged bodies in water** — YOLO is trained on COCO (dominated by upright people). Swimmers/floaters are frequently missed.
-- **Digital illustrations and artwork** — model trained on photographs; illustrated people not reliably detected.
-- **Product-shot partial bodies** — hand, arm, or cropped face in a product photo may trigger a false positive.
+- **Horizontal/submerged bodies in water** — YOLO is trained on COCO (dominated by upright people). Swimmers/floaters are frequently missed. NudeNet may catch these if explicit body parts are visible.
+- **Digital illustrations and artwork** — both models are trained on photographs; illustrated people and NSFW content not reliably detected.
+- **Product-shot partial bodies** — a cropped hand or face in a product photo may trigger a YOLO false positive.
+- **Cunnilingus angle blind spots** — certain camera angles during oral sex may not expose enough body-part area for NudeNet to detect; tracked as `xfail_` fixtures in `tests/fixtures/`.
 
 ## Adding New Tagging Features
 
