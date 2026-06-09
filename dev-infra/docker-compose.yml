@@ -29,8 +29,11 @@ services:
       # Override config.yml with a tracked file so plugins_path is always correct.
       # Without this, Stash writes plugins_path: "" which causes "//main.py" errors.
       - ./stash-config.yml:/root/.stash/config.yml
-      # Fixture images as test data — scan /data/fixtures in the Stash UI
-      - ../tests/fixtures/person_detection:/data/fixtures
+      # Fixture images as test data — scan /data/fixtures in the Stash UI.
+      # All fixture subdirs are mounted so both person_detection and nsfw
+      # fixtures are visible.  Person fixtures scan as /data/fixtures/person_detection/...
+      # NSFW fixtures scan as /data/fixtures/nsfw/...
+      - ../tests/fixtures:/data/fixtures
       - ./metadata:/metadata
       - ./cache:/cache
       - ./generated:/generated

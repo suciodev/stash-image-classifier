@@ -9,7 +9,9 @@ A [Stash](https://github.com/stashapp/stash) plugin that classifies images using
 The plugin ships two integration points:
 1. **Bulk task** (`mode: classify`) — processes all images in a Stash library, run from the Tasks panel.
 2. **Auto-hook** (`Image.Create.Post`) — classifies each image as it is scanned into the library.
-3. **Per-image scraper** (`imageByFragment`) — exposed in the image edit dialog; classifies one image on demand and proposes the `exclude` tag for the user to confirm.
+3. **Per-image scraper** (`imageByFragment`) — exposed in the image edit dialog; classifies one image on demand and proposes tags for the user to confirm.
+
+**Current staging note:** NSFW classification (`NsfwClassifier`) is wired into the scraper only (branch `feature/nsfw-classifier`). The bulk task and auto-hook still apply only the `exclude` tag. Extending `main.py` to run `NsfwClassifier` is the next planned step — see "Adding New Tagging Features" below for the multi-tag loop sketch.
 
 ## Development Commands
 
@@ -70,6 +72,8 @@ make deploy-all
 ```
 
 Production paths point to `/mnt/b/SteamLibrary/.../stashdb/stash-common/{plugins,scrapers}/stash-image-classifier`. **Never run these unless explicitly deploying to production.**
+
+**NudeNet production prerequisite:** `nudenet>=3.0` must be pip-installed in the production Stash container before the scraper can run. The ONNX model (`320n.onnx`, ~12 MB) is bundled inside the package — no separate model download is needed. Run `pip install "nudenet>=3.0,<4.0"` in the production environment once before first use.
 
 ### Simulate a plugin call locally
 
