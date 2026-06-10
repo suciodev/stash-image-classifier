@@ -52,10 +52,21 @@ _SEVERITY_TAG = {
 }
 
 
-def _label_box(img, text, x, y, color):
-    """Draw text with a filled background rectangle."""
+def _box(img, x1, y1, x2, y2, color, alpha=0.55):
+    """Draw a semi-transparent rectangle outline."""
+    overlay = img.copy()
+    cv2.rectangle(overlay, (x1, y1), (x2, y2), color, _BW)
+    cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0, img)
+
+
+def _label_box(img, text, x, y, color, alpha=0.55):
+    """Draw text with a semi-transparent filled background rectangle."""
     (tw, th), base = cv2.getTextSize(text, _FONT, _FS, _TH)
-    cv2.rectangle(img, (x, y - th - base - 2), (x + tw + 4, y + base), color, -1)
+    pt1 = (x, y - th - base - 2)
+    pt2 = (x + tw + 4, y + base)
+    overlay = img.copy()
+    cv2.rectangle(overlay, pt1, pt2, color, -1)
+    cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0, img)
     cv2.putText(img, text, (x + 2, y), _FONT, _FS, _WHITE, _TH, cv2.LINE_AA)
 
 
@@ -125,7 +136,7 @@ def annotate(image_path: Path, person_clf: ImageClassifier, nsfw_clf: NsfwClassi
     has_person = bool(yolo_boxes)
 
     for x1, y1, x2, y2, conf in yolo_boxes:
-        cv2.rectangle(img, (x1, y1), (x2, y2), _COLOR["person"], _BW)
+        _box(img, x1, y1, x2, y2, _COLOR["person"])
         _label_box(img, f"person {conf:.2f}", x1, max(y1 - 3, 14), _COLOR["person"])
 
     # ── NudeNet ──────────────────────────────────────────────────────────────
@@ -137,7 +148,7 @@ def annotate(image_path: Path, person_clf: ImageClassifier, nsfw_clf: NsfwClassi
 
     for x1, y1, x2, y2, label, score, severity in nude_dets:
         color = _COLOR.get(severity or "other", _COLOR["other"])
-        cv2.rectangle(img, (x1, y1), (x2, y2), color, _BW)
+        _box(img, x1, y1, x2, y2, color)
         _label_box(img, f"{label} {score:.2f}", x1, max(y1 - 3, 14), color)
 
     # ── CLIP ─────────────────────────────────────────────────────────────────
