@@ -11,7 +11,7 @@ The plugin ships three integration points:
 2. **Auto-hook** (`Image.Create.Post`) — classifies each image as it is scanned into the library.
 3. **Per-image scraper** (`imageByFragment`) — exposed in the image edit dialog; classifies one image on demand and proposes tags for the user to confirm.
 
-Tags applied: `exclude` (no person, no NSFW content), `explicit`, `revealing`, `suggestive` (NSFW severity tiers from NudeNet body-part detection).
+Tags applied: `exclude` (no person, no NSFW content), `explicit`, `revealing`, `suggestive` (NSFW severity tiers from NudeNet body-part detection), `bikini`, `swimwear`, `lingerie`, `sportswear`, `dress` (clothing categories from CLIP zero-shot classification — applied only when a person is present; not mutually exclusive with NSFW tags).
 
 ## Development Commands
 
@@ -88,6 +88,8 @@ echo '{"server_connection":{"Scheme":"http","Host":"localhost","Port":9999},"arg
 - `stash-image-classifier.yml` — Plugin manifest. Declares the bulk task and the `Image.Create.Post` hook.
 - `main.py` — Entry point. Reads JSON from stdin, dispatches to `run_classify()` (bulk) or `run_hook()` (per-image auto).
 - `src/classifier.py` — YOLOv8-based person detection with confidence and area thresholds. Model path is resolved relative to `__file__` so it works regardless of working directory.
+- `src/nsfw_classifier.py` — NudeNet 640m ONNX body-part detector. Returns severity tags (`explicit`, `revealing`, `suggestive`). Runs unconditionally (YOLO misses unusual explicit poses).
+- `src/clothing_classifier.py` — CLIP zero-shot clothing classifier. Returns category tags (`bikini`, `swimwear`, `lingerie`, `sportswear`, `dress`). Gated on person presence.
 - `src/stash_client.py` — GraphQL client: `find_images`, `find_image_by_id`, `add_tag_to_image`, `find_or_create_tag`.
 - `src/__init__.py` — `log(level, message)` and `progress(value)` helpers (write newline-delimited JSON to stdout per Stash protocol).
 
@@ -98,7 +100,7 @@ echo '{"server_connection":{"Scheme":"http","Host":"localhost","Port":9999},"arg
 
 ### Tests
 
-- `tests/check_fixtures.py` — Manual accuracy check against labelled images in `tests/fixtures/person_detection/{include,exclude}/`. Run directly with `make check-fixtures`.
+- `tests/check_fixtures.py` — Manual accuracy check against labelled images in `tests/fixtures/{person_detection,nsfw,clothing}/`. Run directly with `make check-fixtures`.
 
 ### Dev infrastructure
 
@@ -198,102 +200,49 @@ Stack:
 
 ### NSFW classification pipeline
 
-NsfwClassifier runs **unconditionally** (not gated on YOLO), because YOLOv8 misses people in unusual explicit poses (trained on COCO, not adult content). When any NSFW body parts are detected above threshold, NSFW severity tags take precedence and the `exclude` tag is not applied.
+NsfwClassifier runs **unconditionally** (not gated on YOLO), because YOLOv8 misses people in unusual explicit poses (trained on COCO, not adult content). NSFW and clothing tags are not mutually exclusive — a lingerie image can receive both.
 
 Tag mapping (NudeNet label → Stash tag):
 - `FEMALE_GENITALIA_EXPOSED`, `MALE_GENITALIA_EXPOSED`, `ANUS_EXPOSED` → `explicit`
 - `FEMALE_BREAST_EXPOSED`, `BUTTOCKS_EXPOSED` → `revealing`
 - `FEMALE_BREAST_COVERED`, `FEMALE_GENITALIA_COVERED`, `BUTTOCKS_COVERED` → `suggestive`
 
+### Clothing classification pipeline
+
+ClothingClassifier runs only when a person is detected. CLIP zero-shot matches the image against 5 clothing prompts plus a catch-all; the highest-probability label above 0.5 threshold produces a tag.
+
+Prompts and tags (see `src/clothing_classifier.py` for exact strings):
+- two-piece swimwear → `bikini`
+- one-piece swimsuit → `swimwear`
+- lingerie/underwear → `lingerie`
+- athletic wear/leggings/sports bra → `sportswear`
+- dress or skirt → `dress`
+- catch-all → *(no tag)*
+
+Tune `min_confidence` (default 0.5) using `tests/check_fixtures.py` against `tests/fixtures/clothing/`. See ADR-005.
+
+### Classification decision flow (`_classify_image` in `main.py`)
+
+```
+nsfw_tags  = NsfwClassifier.classify(path)    # unconditional
+has_person = ImageClassifier.has_person(path)
+
+if not has_person and not nsfw_tags → ["exclude"]
+clothing_tags = ClothingClassifier.classify(path) if has_person else []
+return nsfw_tags + clothing_tags               # may be empty []
+```
+
 ### Known classifier limitations
 
 - **Horizontal/submerged bodies in water** — YOLO is trained on COCO (dominated by upright people). Swimmers/floaters are frequently missed. NudeNet may catch these if explicit body parts are visible.
-- **Digital illustrations and artwork** — both models are trained on photographs; illustrated people and NSFW content not reliably detected.
+- **Digital illustrations and artwork** — all three models are trained on photographs; illustrated people and NSFW/clothing content not reliably detected.
 - **Product-shot partial bodies** — a cropped hand or face in a product photo may trigger a YOLO false positive.
 - **Cunnilingus angle blind spots** — certain camera angles during oral sex may not expose enough body-part area for NudeNet to detect; tracked as `xfail_` fixtures in `tests/fixtures/`.
-
-## Adding New Tagging Features
-
-### Architecture pattern
-
-Each new tag type maps to a new classifier class in `src/`. The existing `ImageClassifier` in `src/classifier.py` is the reference implementation — model loaded once at construction, single public method returning a bool or list of strings.
-
-The pipeline in `main.py` currently hard-wires `has_person → tag "exclude"`. As new classifiers are added, this should evolve to a multi-tag loop:
-
-```python
-# Sketch — not current code
-tags_to_apply = []
-has_person = classifier.has_person(path)
-if not has_person:
-    tags_to_apply.append("exclude")
-else:
-    tags_to_apply.extend(clothing_classifier.classify(path))  # e.g. ["bikini"]
-for tag in tags_to_apply:
-    client.add_tag_to_image(image_id, client.find_or_create_tag(tag))
-```
-
-The same pattern applies in `run_hook` (per-image hook) and `scrapers/classify.py` (per-image scraper).
-
-### Clothing tags (bikini, lingerie, underwear, etc.)
-
-**Recommended approach: CLIP zero-shot classification**
-
-CLIP compares an image against a list of text prompts and returns similarity scores. No training required — new categories are just new strings. `torch` is already a dependency, so the only addition is `transformers` (HuggingFace) or `openai-clip`.
-
-```python
-# src/clothing_classifier.py — sketch
-from transformers import CLIPProcessor, CLIPModel
-import torch
-
-_LABELS = ["bikini or swimwear", "lingerie or underwear", "fully clothed", "nude"]
-_MODEL_ID = "openai/clip-vit-base-patch32"   # ~600 MB, runs CPU-only
-
-class ClothingClassifier:
-    def __init__(self):
-        self.model = CLIPModel.from_pretrained(_MODEL_ID)
-        self.processor = CLIPProcessor.from_pretrained(_MODEL_ID)
-
-    def classify(self, image_path: str) -> list[str]:
-        """Returns tag names to apply (empty list = no clothing tag)."""
-        from PIL import Image
-        image = Image.open(image_path).convert("RGB")
-        inputs = self.processor(text=_LABELS, images=image, return_tensors="pt", padding=True)
-        with torch.no_grad():
-            logits = self.model(**inputs).logits_per_image[0]
-        probs = logits.softmax(dim=0)
-        best_idx = probs.argmax().item()
-        best_label = _LABELS[best_idx]
-        if probs[best_idx] < 0.5:          # not confident enough
-            return []
-        if "bikini" in best_label or "swimwear" in best_label:
-            return ["bikini"]
-        if "lingerie" in best_label or "underwear" in best_label:
-            return ["lingerie"]
-        return []
-```
-
-**Key design decisions:**
-
-- **Gate on person detection first.** Only run clothing classification when `has_person` is True — otherwise you'd tag an empty bikini on a hanger.
-- **Prompt wording matters more than threshold tuning.** CLIP is sensitive to phrasing; test against fixtures before shipping. "a woman in a bikini" beats "bikini" as a prompt.
-- **Model file handling.** CLIP downloads on first use via HuggingFace; for offline deployments, pre-download with `model.save_pretrained("./clip-vit-b32")` and load from that local path. Follow the same pattern as `yolov8n.pt` — bundle alongside the plugin.
-- **Confidence threshold.** Start at 0.5 and tune downward using `tests/check_fixtures.py`-style validation against labelled examples before lowering.
-
-**Alternative: attribute detection with a fashion YOLO model**
-
-If CLIP accuracy is insufficient (e.g. pool scenes where swimwear vs. nude is ambiguous), consider a model fine-tuned on DeepFashion2. These exist as pre-trained YOLO checkpoints and would slot into `ImageClassifier`'s pattern with a different class list. Trade-off: less flexible (fixed label set), more accurate per-category.
+- **Swimwear vs. nude in pool scenes** — CLIP may confuse a nude person in water with swimwear. If this is a problem, consider a fashion YOLO model (see ADR-005).
 
 ### Adding fixtures for a new classifier
 
-Add labelled samples under `tests/fixtures/<feature>/`:
-```
-tests/fixtures/clothing/
-    bikini/       person_bikini_beach_01.jpg ...
-    lingerie/     person_lingerie_studio_01.jpg ...
-    clothed/      person_jeans_street_01.jpg ...
-```
-
-Then extend `tests/check_fixtures.py` with a validation loop for the new classifier, following the same pattern as the person detection check. Run with `uv run python -m tests.check_fixtures` before committing thresholds.
+Add labelled samples under `tests/fixtures/<feature>/` following the naming convention `{expected_tag}_{descriptive_scene}.{ext}`. Add `.gitkeep` to empty dirs. Extend `tests/check_fixtures.py` with a validation loop. Run with `uv run python -m tests.check_fixtures` before committing thresholds.
 
 ## Stash GraphQL API
 

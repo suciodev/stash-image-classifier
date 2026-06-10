@@ -11,6 +11,7 @@ dependencies = [
     "torch>=2.0.0",
     "torchvision>=0.15.0",
     "nudenet>=3.0,<4.0",
+    "transformers>=4.30.0",
 ]
 
 # On Linux, use CPU-only torch wheels (~1 GB vs ~2.5 GB for the CUDA build).

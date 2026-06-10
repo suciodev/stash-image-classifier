@@ -71,3 +71,37 @@ if nsfw_total:
     print(f"\nNSFW result: {nsfw_correct}/{nsfw_total} correct ({100*nsfw_correct//nsfw_total}%)")
 else:
     print("\nNSFW result: no fixtures found — add images to tests/fixtures/nsfw/{explicit,revealing,suggestive,clean}/")
+
+# ── Clothing detection ────────────────────────────────────────────────────────
+
+from src.clothing_classifier import ClothingClassifier  # noqa: E402
+
+clothing_clf = ClothingClassifier()
+clothing_base = Path("tests/fixtures/clothing")
+
+clothing_total = clothing_correct = 0
+
+# Subdirs: bikini/, swimwear/, lingerie/, sportswear/, dress/ → expect that tag
+# Any dir named "clean" → expect empty list
+for label in ("bikini", "swimwear", "lingerie", "sportswear", "dress", "clean"):
+    fixture_dir = clothing_base / label
+    if not fixture_dir.exists():
+        continue
+    expect_tag = label if label != "clean" else None
+    print(f"\n--- CLOTHING {label.upper()} (expect tag={expect_tag!r}) ---")
+    for img in _images(fixture_dir):
+        is_xfail = img.name.startswith(_XFAIL_PREFIX)
+        tags = clothing_clf.classify(str(img))
+        ok = (expect_tag in tags) if expect_tag else (tags == [])
+        if is_xfail:
+            status = "XPASS" if ok else "KNOWN"
+        else:
+            status = "OK   " if ok else "WRONG"
+            clothing_total += 1
+            clothing_correct += ok
+        print(f"  [{status}] tags={tags or '(none)'}  {img.name[:60]}")
+
+if clothing_total:
+    print(f"\nClothing result: {clothing_correct}/{clothing_total} correct ({100*clothing_correct//clothing_total}%)")
+else:
+    print("\nClothing result: no fixtures found — add images to tests/fixtures/clothing/{bikini,swimwear,lingerie,sportswear,dress}/")

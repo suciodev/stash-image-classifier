@@ -6,14 +6,10 @@ Stash invokes this as an imageByFragment scraper: it sends the current image
 data as JSON on stdin, and expects a JSON object with updated fields on stdout.
 
 Pipeline (priority order):
-1. NSFW detection — if any NSFW labels fire, return those tags.
-   Runs on all images, including those where person detection would miss
-   the subject (e.g. partial bodies, swimmers).
-2. Person detection — if no person found, return "exclude".
-3. Default — person present and not NSFW; return no tags.
-
-NSFW and exclude are mutually exclusive: an NSFW image never also receives
-the exclude tag, even if no person is detected by the person classifier.
+1. NSFW detection — runs unconditionally; catches explicit images YOLO misses.
+2. Person detection — if no person and no NSFW, return "exclude".
+3. Clothing detection — runs when person is present; NSFW and clothing tags
+   are not mutually exclusive (a lingerie image can receive both).
 """
 import contextlib
 import json
@@ -50,10 +46,12 @@ def _suppress_stdout():
 
 
 with _suppress_stdout():
-    from src.classifier import ImageClassifier      # noqa: E402
-    from src.nsfw_classifier import NsfwClassifier  # noqa: E402
+    from src.classifier import ImageClassifier          # noqa: E402
+    from src.nsfw_classifier import NsfwClassifier      # noqa: E402
+    from src.clothing_classifier import ClothingClassifier  # noqa: E402
     _person_clf = ImageClassifier()
     _nsfw_clf = NsfwClassifier()
+    _clothing_clf = ClothingClassifier()
 
 
 _STASH_PORT = os.environ.get("STASH_PORT", "9999")
@@ -97,21 +95,13 @@ def _lookup_path_by_id(image_id: str) -> str | None:
 
 
 def _classify_image(path: str) -> dict:
-    """
-    Run classifiers in priority order and return the Stash scraper response dict.
-
-    To add a future classifier (e.g. clothing style):
-      - Add a call here, gated on whatever conditions apply.
-      - Keep the control flow explicit rather than adding to a list.
-    """
     nsfw_tags = _nsfw_clf.classify(path)
-    if nsfw_tags:
-        return {"tags": [{"name": t} for t in nsfw_tags]}
-
-    if not _person_clf.has_person(path):
+    has_person = _person_clf.has_person(path)
+    if not has_person and not nsfw_tags:
         return {"tags": [{"name": "exclude"}]}
-
-    return {}
+    clothing_tags = _clothing_clf.classify(path) if has_person else []
+    all_tags = nsfw_tags + clothing_tags
+    return {"tags": [{"name": t} for t in all_tags]} if all_tags else {}
 
 
 def main():

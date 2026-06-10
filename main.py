@@ -4,11 +4,28 @@ from pathlib import Path
 
 from src.classifier import ImageClassifier
 from src.nsfw_classifier import NsfwClassifier
+from src.clothing_classifier import ClothingClassifier, CLOTHING_TAGS
 from src.stash_client import StashClient
 from src import log, progress
 
 # Tags managed by this classifier. Used to detect already-classified images.
-_CLASSIFIER_TAGS = ("exclude", "explicit", "revealing", "suggestive")
+_CLASSIFIER_TAGS = (
+    "exclude",
+    "explicit", "revealing", "suggestive",
+    "bikini", "swimwear", "lingerie", "sportswear", "dress",
+)
+
+
+assert CLOTHING_TAGS <= set(_CLASSIFIER_TAGS), (
+    f"ClothingClassifier produces tags not in _CLASSIFIER_TAGS: {CLOTHING_TAGS - set(_CLASSIFIER_TAGS)}"
+)
+
+
+def _resolve_tag_ids(client: "StashClient", exclude_tag_name: str) -> dict[str, str]:
+    tag_ids = {name: client.find_or_create_tag(name) for name in _CLASSIFIER_TAGS}
+    if exclude_tag_name not in tag_ids:
+        tag_ids[exclude_tag_name] = client.find_or_create_tag(exclude_tag_name)
+    return tag_ids
 
 
 def main():
@@ -26,42 +43,49 @@ def main():
     client = StashClient(server)
     classifier = ImageClassifier()
     nsfw_classifier = NsfwClassifier()
+    clothing_classifier = ClothingClassifier()
 
     if mode == "classify":
-        run_classify(client, classifier, nsfw_classifier, args)
+        run_classify(client, classifier, nsfw_classifier, clothing_classifier, args)
     elif mode == "Image.Create.Post":
-        run_hook(client, classifier, nsfw_classifier, args)
+        run_hook(client, classifier, nsfw_classifier, clothing_classifier, args)
     else:
         log("error", f"Unknown mode: {mode}")
         sys.exit(1)
 
 
-def _classify_image(path: str, classifier: ImageClassifier, nsfw_classifier: NsfwClassifier, exclude_tag: str) -> list[str]:
+def _classify_image(
+    path: str,
+    classifier: ImageClassifier,
+    nsfw_classifier: NsfwClassifier,
+    clothing_classifier: ClothingClassifier,
+    exclude_tag: str,
+) -> list[str]:
     """
     Returns the list of tag names to apply to an image.
 
     NSFW classification runs unconditionally — needed to catch explicit images
     that YOLO misses (unusual poses not in COCO training data).
+
+    Clothing classification runs only when a person is present (no point
+    tagging empty clothing on a hanger). NSFW and clothing tags are not
+    mutually exclusive — a lingerie image can receive both.
     """
-    has_person = classifier.has_person(path)
     nsfw_tags = nsfw_classifier.classify(path)
-    if nsfw_tags:
-        return nsfw_tags
-    if not has_person:
+    has_person = classifier.has_person(path)
+    if not has_person and not nsfw_tags:
         return [exclude_tag]
-    return []
+    clothing_tags = clothing_classifier.classify(path) if has_person else []
+    return nsfw_tags + clothing_tags
 
 
-def run_classify(client: "StashClient", classifier: "ImageClassifier", nsfw_classifier: "NsfwClassifier", args: dict):
+def run_classify(client: "StashClient", classifier: "ImageClassifier", nsfw_classifier: "NsfwClassifier", clothing_classifier: "ClothingClassifier", args: dict):
     exclude_tag_name = args.get("tag_name", "exclude")
     batch_size = int(args.get("batch_size", 50))
     skip_tagged = str(args.get("skip_tagged", "false")).lower() == "true"
     recheck_exclude = str(args.get("recheck_exclude", "false")).lower() == "true"
 
-    # Pre-resolve all tag IDs managed by this classifier.
-    tag_ids: dict[str, str] = {name: client.find_or_create_tag(name) for name in _CLASSIFIER_TAGS}
-    if exclude_tag_name not in tag_ids:
-        tag_ids[exclude_tag_name] = client.find_or_create_tag(exclude_tag_name)
+    tag_ids = _resolve_tag_ids(client, exclude_tag_name)
     classifier_tag_id_set = set(tag_ids.values())
     nsfw_severity_tag_id_set = {tag_ids[n] for n in ("explicit", "revealing", "suggestive") if n in tag_ids}
 
@@ -109,7 +133,7 @@ def run_classify(client: "StashClient", classifier: "ImageClassifier", nsfw_clas
                 progress(processed / total)
                 continue
 
-            desired_tag_names = _classify_image(image_path, classifier, nsfw_classifier, exclude_tag_name)
+            desired_tag_names = _classify_image(image_path, classifier, nsfw_classifier, clothing_classifier, exclude_tag_name)
             desired_tag_ids = [tag_ids[n] for n in desired_tag_names if n in tag_ids]
 
             # Remove stale 'exclude' if the image now has a person or NSFW content.
@@ -149,7 +173,7 @@ def run_classify(client: "StashClient", classifier: "ImageClassifier", nsfw_clas
     log("info", summary)
 
 
-def run_hook(client: "StashClient", classifier: "ImageClassifier", nsfw_classifier: "NsfwClassifier", args: dict):
+def run_hook(client: "StashClient", classifier: "ImageClassifier", nsfw_classifier: "NsfwClassifier", clothing_classifier: "ClothingClassifier", args: dict):
     hook_ctx = args.get("hookContext", {})
     image_id = str(hook_ctx.get("id") or hook_ctx.get("ID", ""))
     if not image_id:
@@ -162,16 +186,16 @@ def run_hook(client: "StashClient", classifier: "ImageClassifier", nsfw_classifi
         return
 
     exclude_tag_name = args.get("tag_name", "exclude")
-    exclude_tag_id = client.find_or_create_tag(exclude_tag_name)
+    tag_ids = _resolve_tag_ids(client, exclude_tag_name)
 
-    has_person = classifier.has_person(image["path"])
-    is_nsfw = bool(nsfw_classifier.classify(image["path"])) if not has_person else False
-    if not has_person and not is_nsfw:
-        client.add_tag_to_image(image["id"], exclude_tag_id, existing_tag_ids=image["tag_ids"])
-        log("info", f"Image {image_id} — tagged '{exclude_tag_name}' (no person or NSFW detected)")
+    desired_tag_names = _classify_image(image["path"], classifier, nsfw_classifier, clothing_classifier, exclude_tag_name)
+    desired_tag_ids = [tag_ids[n] for n in desired_tag_names if n in tag_ids]
+
+    if desired_tag_ids:
+        client.update_image_tags(image["id"], desired_tag_ids, [], image["tag_ids"])
+        log("info", f"Image {image_id} — tagged: {', '.join(desired_tag_names)}")
     else:
-        reason = "person detected" if has_person else "NSFW detected"
-        log("info", f"Image {image_id} — no tag applied ({reason})")
+        log("info", f"Image {image_id} — no tag applied (person present, no NSFW or clothing detected)")
 
 
 if __name__ == "__main__":
