@@ -12,6 +12,8 @@ dist/
 *.egg-info/
 .env
 
+debug_out/
+
 # dev-infra runtime data (Dockerfile and docker-compose.yml are tracked)
 dev-infra/stash-config/
 dev-infra/metadata/
