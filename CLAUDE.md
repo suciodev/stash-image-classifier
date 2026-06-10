@@ -209,17 +209,19 @@ Tag mapping (NudeNet label → Stash tag):
 
 ### Clothing classification pipeline
 
-ClothingClassifier runs only when a person is detected. CLIP zero-shot matches the image against 5 clothing prompts plus a catch-all; the highest-probability label above 0.5 threshold produces a tag.
+ClothingClassifier runs only when a person is detected. CLIP zero-shot matches the image against 5 clothing prompts plus a catch-all; the highest-probability label above 0.4 threshold produces a tag.
 
 Prompts and tags (see `src/clothing_classifier.py` for exact strings):
-- two-piece swimwear → `bikini`
-- one-piece swimsuit → `swimwear`
-- lingerie/underwear → `lingerie`
-- athletic wear/leggings/sports bra → `sportswear`
-- dress or skirt → `dress`
-- catch-all → *(no tag)*
+- bikini or two-piece swimwear → `bikini`
+- one-piece swimsuit, bathing suit, or maillot → `swimwear`
+- lingerie, lace underwear, or bra and panties set → `lingerie`
+- exercising/at gym: athletic clothing, sports bra, or gym leggings → `sportswear`
+- fashion dress, mini/cocktail/bodycon dress, skirt, or street style → `dress`
+- catch-all (regular/casual clothes) → *(no tag)*
 
-Tune `min_confidence` (default 0.5) using `tests/check_fixtures.py` against `tests/fixtures/clothing/`. See ADR-005.
+Tune `min_confidence` (default 0.4) using `tests/check_fixtures.py` against `tests/fixtures/clothing/`. See ADR-005.
+
+Note: no negative fixtures (regular-clothed subjects) exist in `tests/fixtures/clothing/`. The reported accuracy measures recall only — precision on untagged subjects is untested. Add `clean/` fixtures before lowering the threshold further.
 
 ### Classification decision flow (`_classify_image` in `main.py`)
 

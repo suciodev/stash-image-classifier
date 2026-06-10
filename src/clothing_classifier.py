@@ -11,11 +11,11 @@ _MODEL_ID = "openai/clip-vit-base-patch32"
 # Each entry: (CLIP prompt, tag name or None for catch-all)
 _LABEL_MAP: list[tuple[str, str | None]] = [
     ("a person wearing a bikini or two-piece swimwear", "bikini"),
-    ("a person wearing a one-piece swimsuit", "swimwear"),
-    ("a person wearing lingerie or underwear", "lingerie"),
-    ("a person wearing athletic wear, gym clothes, leggings, or a sports bra", "sportswear"),
-    ("a person wearing a dress or skirt", "dress"),
-    ("a person in regular clothes or other clothing", None),  # catch-all, no tag
+    ("a person wearing a one-piece swimsuit, one-piece bathing suit, or maillot", "swimwear"),
+    ("a person wearing lingerie, lace underwear, or a bra and panties set", "lingerie"),
+    ("a person exercising or at the gym wearing athletic clothing, sports bra, or gym leggings", "sportswear"),
+    ("a person wearing a fashion dress, mini dress, cocktail dress, bodycon dress, skirt, or street style outfit", "dress"),
+    ("a person in regular everyday clothes, casual wear, or other clothing", None),  # catch-all, no tag
 ]
 
 _LABELS = [prompt for prompt, _ in _LABEL_MAP]
@@ -38,10 +38,10 @@ class ClothingClassifier:
     Known limitations:
       - Accuracy drops for illustrated/artistic content (model trained on photos).
       - Partial-body crops may confuse the model (no full clothing visible).
-      - min_confidence of 0.5 is conservative; lower it if desired categories are missed.
+      - min_confidence of 0.4 may produce false positives; raise it if you see wrong tags.
     """
 
-    def __init__(self, min_confidence: float = 0.5, model_id: str = _MODEL_ID):
+    def __init__(self, min_confidence: float = 0.4, model_id: str = _MODEL_ID):
         self._processor = CLIPProcessor.from_pretrained(model_id)
         self._model = CLIPModel.from_pretrained(model_id)
         self._model.eval()

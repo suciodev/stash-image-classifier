@@ -20,13 +20,13 @@ Labels and tags:
 | CLIP prompt | Tag |
 |-------------|-----|
 | "a person wearing a bikini or two-piece swimwear" | `bikini` |
-| "a person wearing a one-piece swimsuit" | `swimwear` |
-| "a person wearing lingerie or underwear" | `lingerie` |
-| "a person wearing athletic wear, gym clothes, leggings, or a sports bra" | `sportswear` |
-| "a person wearing a dress or skirt" | `dress` |
-| "a person in regular clothes or other clothing" | *(none — catch-all)* |
+| "a person wearing a one-piece swimsuit, one-piece bathing suit, or maillot" | `swimwear` |
+| "a person wearing lingerie, lace underwear, or a bra and panties set" | `lingerie` |
+| "a person exercising or at the gym wearing athletic clothing, sports bra, or gym leggings" | `sportswear` |
+| "a person wearing a fashion dress, mini dress, cocktail dress, bodycon dress, skirt, or street style outfit" | `dress` |
+| "a person in regular everyday clothes, casual wear, or other clothing" | *(none — catch-all)* |
 
-Default confidence threshold: 0.5. Tune downward using `tests/check_fixtures.py` if desired categories are missed; raise it if false positives appear.
+Default confidence threshold: 0.4. Raise it if false positives appear on regular-clothed subjects; lower it if desired categories are missed. Note: the fixture set has no negative examples (regular clothes), so the reported accuracy can only reflect recall — not precision on untagged subjects.
 
 ## Consequences
 
