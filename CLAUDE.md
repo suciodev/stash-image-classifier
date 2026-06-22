@@ -4,14 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A [Stash](https://github.com/stashapp/stash) plugin that classifies images using local ML inference and auto-applies tags. The initial use case: tag images where no person is the main subject with an "exclude" label, targeting Instagram media libraries.
+**PerceptTag** — a [Stash](https://github.com/stashapp/stash) plugin that classifies images using local ML inference and auto-applies tags. The initial use case: tag images where no person is the main subject with an "exclude" label, targeting Instagram media libraries.
 
-The plugin ships three integration points:
-1. **Bulk task** (`mode: classify`) — processes all images in a Stash library, run from the Tasks panel. Supports three variants: Classify All Images, Classify Untagged Images, and Recheck Exclude-Tagged Images.
-2. **Auto-hook** (`Image.Create.Post`) — classifies each image as it is scanned into the library.
-3. **Per-image scraper** (`imageByFragment`) — exposed in the image edit dialog; classifies one image on demand and proposes tags for the user to confirm.
+The plugin ships four integration points:
+1. **Bulk task** (`mode: classify`) — processes images in a Stash library, run from the Tasks panel. Four variants: Classify All Images, Classify Untagged Images, Recheck Exclude-Tagged Images, and Classify Marked Images.
+2. **Selective task** (`tagged_only: true`) — processes only images tagged with `percepttag:pending`, then swaps the marker to `percepttag:done`. Designed for large libraries where full scans are too slow.
+3. **Auto-hook** (`Image.Create.Post`) — classifies each image as it is scanned into the library.
+4. **Per-image scraper** (`imageByFragment`) — exposed in the image edit dialog; classifies one image on demand and proposes tags for the user to confirm.
 
-Tags applied: `exclude` (no person, no NSFW content), `explicit`, `revealing`, `suggestive` (NSFW severity tiers from NudeNet body-part detection).
+Tags applied: `exclude` (no person, no NSFW content), `explicit`, `revealing`, `suggestive` (NSFW severity tiers from NudeNet body-part detection), `percepttag:pending` / `percepttag:done` (user-managed marker tags for selective classification).
 
 ## Development Commands
 
@@ -88,7 +89,7 @@ echo '{"server_connection":{"Scheme":"http","Host":"localhost","Port":9999},"arg
 - `stash-image-classifier.yml` — Plugin manifest. Declares the bulk task and the `Image.Create.Post` hook.
 - `main.py` — Entry point. Reads JSON from stdin, dispatches to `run_classify()` (bulk) or `run_hook()` (per-image auto).
 - `src/classifier.py` — YOLOv8-based person detection with confidence and area thresholds. Model path is resolved relative to `__file__` so it works regardless of working directory.
-- `src/stash_client.py` — GraphQL client: `find_images`, `find_image_by_id`, `add_tag_to_image`, `find_or_create_tag`.
+- `src/stash_client.py` — GraphQL client: `find_images`, `find_image_by_id`, `add_tag_to_image`, `find_or_create_tag`, `count_images_by_tag`, `find_images_by_tag` (the last two power selective classification via `ImageFilterType`).
 - `src/__init__.py` — `log(level, message)` and `progress(value)` helpers (write newline-delimited JSON to stdout per Stash protocol).
 
 ### Scraper
@@ -99,6 +100,7 @@ echo '{"server_connection":{"Scheme":"http","Host":"localhost","Port":9999},"arg
 ### Tests
 
 - `tests/check_fixtures.py` — Manual accuracy check against labelled images in `tests/fixtures/person_detection/{include,exclude}/`. Run directly with `make check-fixtures`.
+- `tests/test_main.py` — Unit tests for `run_classify` (mocked StashClient), covering the `tagged_only` selective classification path.
 
 ### Dev infrastructure
 
@@ -113,15 +115,19 @@ Stash plugins are invoked as subprocess tasks. Stash passes JSON to the plugin v
 ### Plugin manifest shape
 
 ```yaml
-name: Image Classifier
+name: PerceptTag
 exec:
   - python
   - "{pluginDir}/main.py"
 interface: raw
 tasks:
-  - name: Classify Images
+  - name: Classify All Images
     defaultArgs:
       mode: classify
+  - name: Classify Marked Images
+    defaultArgs:
+      mode: classify
+      tagged_only: true
 hooks:
   - name: Auto-classify on scan
     triggeredBy:
@@ -301,6 +307,7 @@ The plugin interacts with Stash's local GraphQL endpoint at `http://HOST:PORT/gr
 
 Key operations:
 - `findImages(filter: {...})` — paginate through the image library
+- `findImages(image_filter: { tags: { value: [$id], modifier: INCLUDES_ALL } })` — filter images by tag; used by the selective classification path
 - `findImage(id: $id)` — fetch a single image (used by the hook handler)
 - `imageUpdate(input: {...})` — apply tags; always merges with existing tags to avoid clobbering them
 - `findOrCreateTag(name: "exclude")` — get or create a tag by name
@@ -333,6 +340,36 @@ exec:
 **Cause:** When Stash first starts with an empty config dir, it writes `/root/.stash/config.yml` with `plugins_path: ""`. Downstream effects include broken plugin discovery.
 
 **Fix:** `dev-infra/stash-config.yml` is a tracked file mounted as `/root/.stash/config.yml` in the container, ensuring `plugins_path: /root/.stash/plugins` is always present. See ADR-002.
+
+## Selective Classification
+
+The `tagged_only` mode in `run_classify` is designed for large libraries where full scans are impractical. It works by filtering images using Stash's `ImageFilterType` tag filter rather than iterating everything.
+
+### Marker tag lifecycle
+
+```
+User bulk-applies in Stash UI
+        │
+        ▼
+percepttag:pending  ──── Classify Marked Images task ────►  percepttag:done
+                                    │
+                                    ▼
+                         + exclude / explicit / revealing / suggestive
+                           (as determined by classifiers)
+```
+
+Key invariants:
+- The marker swap (`pending` → `done`) is **unconditional** — every image processed by the task gets its marker swapped, regardless of what classifier tags were applied.
+- The swap happens in the **same `imageUpdate` mutation** as the classifier tags — one GraphQL call per image, no extra round trip.
+- The task always fetches **page 1** from `find_images_by_tag` (never increments the page counter). Images fall out of the tag filter as `percepttag:pending` is removed, so re-fetching page 1 naturally yields the next unprocessed batch.
+- Images with no resolvable file path still have their marker swapped so they don't re-appear in subsequent batches.
+
+### Workflow for users
+
+1. In Stash, filter to a gallery, studio, or path
+2. Select all images → bulk-apply `percepttag:pending`
+3. Run **Classify Marked Images** from the Tasks panel
+4. Monitor progress; when done, images carry `percepttag:done` plus any classifier tags
 
 ## Project Constraints
 
