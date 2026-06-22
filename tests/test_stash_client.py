@@ -70,3 +70,45 @@ def test_update_image_tags_noop_when_unchanged(client):
     with patch.object(client.session, "post") as mock_post:
         client.update_image_tags("img-1", ["existing"], [], ["existing"])
         mock_post.assert_not_called()
+
+
+def test_count_images_by_tag(client):
+    data = {"findImages": {"count": 7}}
+    with patch.object(client.session, "post", return_value=_mock_response(data)) as mock_post:
+        assert client.count_images_by_tag("tag-123") == 7
+        sent = mock_post.call_args[1]["json"]
+        variables = sent["variables"]
+        assert variables["image_filter"]["tags"]["value"] == ["tag-123"]
+        assert variables["image_filter"]["tags"]["modifier"] == "INCLUDES_ALL"
+
+
+def test_find_images_by_tag_returns_image_list(client):
+    data = {
+        "findImages": {
+            "images": [
+                {
+                    "id": "img-1",
+                    "visual_files": [{"path": "/data/img.jpg"}],
+                    "tags": [{"id": "tag-123"}],
+                }
+            ]
+        }
+    }
+    with patch.object(client.session, "post", return_value=_mock_response(data)) as mock_post:
+        results = client.find_images_by_tag("tag-123", page=2, per_page=10)
+        assert results == [{"id": "img-1", "path": "/data/img.jpg", "tag_ids": ["tag-123"]}]
+        variables = mock_post.call_args[1]["json"]["variables"]
+        assert variables["image_filter"]["tags"]["value"] == ["tag-123"]
+        assert variables["filter"]["page"] == 2
+        assert variables["filter"]["per_page"] == 10
+
+
+def test_find_images_by_tag_handles_missing_visual_files(client):
+    data = {
+        "findImages": {
+            "images": [{"id": "img-2", "visual_files": [], "tags": []}]
+        }
+    }
+    with patch.object(client.session, "post", return_value=_mock_response(data)):
+        results = client.find_images_by_tag("tag-123")
+        assert results == [{"id": "img-2", "path": None, "tag_ids": []}]

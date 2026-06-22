@@ -57,22 +57,31 @@ def run_classify(client: "StashClient", classifier: "ImageClassifier", nsfw_clas
     batch_size = int(args.get("batch_size", 50))
     skip_tagged = str(args.get("skip_tagged", "false")).lower() == "true"
     recheck_exclude = str(args.get("recheck_exclude", "false")).lower() == "true"
+    tagged_only = str(args.get("tagged_only", "false")).lower() == "true"
 
-    # Pre-resolve all tag IDs managed by this classifier.
     tag_ids: dict[str, str] = {name: client.find_or_create_tag(name) for name in _CLASSIFIER_TAGS}
     if exclude_tag_name not in tag_ids:
         tag_ids[exclude_tag_name] = client.find_or_create_tag(exclude_tag_name)
     classifier_tag_id_set = set(tag_ids.values())
     nsfw_severity_tag_id_set = {tag_ids[n] for n in ("explicit", "revealing", "suggestive") if n in tag_ids}
 
-    total = client.count_images()
-    if skip_tagged:
+    pending_tag_id = done_tag_id = None
+    if tagged_only:
+        pending_tag_id = client.find_or_create_tag("percepttag:pending")
+        done_tag_id = client.find_or_create_tag("percepttag:done")
+        total = client.count_images_by_tag(pending_tag_id)
+        mode_label = "percepttag:pending images"
+    elif skip_tagged:
+        total = client.count_images()
         mode_label = "untagged images"
     elif recheck_exclude:
+        total = client.count_images()
         mode_label = "exclude-tagged and untagged images"
     else:
+        total = client.count_images()
         mode_label = "all images"
-    log("info", f"Starting classification of {mode_label} — {total} images in library")
+
+    log("info", f"Starting classification of {mode_label} — {total} images to process")
     progress(0.0)
 
     processed = 0
@@ -82,7 +91,12 @@ def run_classify(client: "StashClient", classifier: "ImageClassifier", nsfw_clas
     page = 1
 
     while processed < total:
-        images = client.find_images(page=page, per_page=batch_size)
+        if tagged_only:
+            # Always fetch page 1: images fall out of the filter as percepttag:pending is removed
+            images = client.find_images_by_tag(pending_tag_id, page=1, per_page=batch_size)
+        else:
+            images = client.find_images(page=page, per_page=batch_size)
+
         if not images:
             break
 
@@ -91,20 +105,23 @@ def run_classify(client: "StashClient", classifier: "ImageClassifier", nsfw_clas
             existing_tag_ids: list[str] = image.get("tag_ids", [])
             filename = Path(image_path).name if image_path else f"id={image['id']}"
 
-            if skip_tagged and classifier_tag_id_set.intersection(existing_tag_ids):
-                skipped += 1
-                processed += 1
-                progress(processed / total)
-                continue
+            if not tagged_only:
+                if skip_tagged and classifier_tag_id_set.intersection(existing_tag_ids):
+                    skipped += 1
+                    processed += 1
+                    progress(processed / total)
+                    continue
 
-            if recheck_exclude and nsfw_severity_tag_id_set.intersection(existing_tag_ids):
-                skipped += 1
-                processed += 1
-                progress(processed / total)
-                continue
+                if recheck_exclude and nsfw_severity_tag_id_set.intersection(existing_tag_ids):
+                    skipped += 1
+                    processed += 1
+                    progress(processed / total)
+                    continue
 
             if not image_path:
                 log("warning", f"{filename} — no path, skipping")
+                if tagged_only:
+                    client.update_image_tags(image["id"], [done_tag_id], [pending_tag_id], existing_tag_ids)
                 processed += 1
                 progress(processed / total)
                 continue
@@ -112,7 +129,6 @@ def run_classify(client: "StashClient", classifier: "ImageClassifier", nsfw_clas
             desired_tag_names = _classify_image(image_path, classifier, nsfw_classifier, exclude_tag_name)
             desired_tag_ids = [tag_ids[n] for n in desired_tag_names if n in tag_ids]
 
-            # Remove stale 'exclude' if the image now has a person or NSFW content.
             exclude_tag_id = tag_ids[exclude_tag_name]
             stale_exclude = (
                 exclude_tag_id in existing_tag_ids
@@ -120,7 +136,15 @@ def run_classify(client: "StashClient", classifier: "ImageClassifier", nsfw_clas
             )
             remove_ids = [exclude_tag_id] if stale_exclude else []
 
-            if desired_tag_ids or remove_ids:
+            if tagged_only:
+                remove_ids.append(pending_tag_id)
+                client.update_image_tags(
+                    image["id"],
+                    desired_tag_ids + [done_tag_id],
+                    remove_ids,
+                    existing_tag_ids,
+                )
+            elif desired_tag_ids or remove_ids:
                 client.update_image_tags(image["id"], desired_tag_ids, remove_ids, existing_tag_ids)
 
             added_names = [n for n in desired_tag_names if tag_ids.get(n) not in existing_tag_ids]
@@ -131,15 +155,19 @@ def run_classify(client: "StashClient", classifier: "ImageClassifier", nsfw_clas
                 if stale_exclude:
                     parts.append("removed stale: exclude")
                     cleaned += 1
+                if tagged_only:
+                    parts.append("marker: pending → done")
                 log("info", f"{filename} — {'; '.join(parts)}")
                 tagged += len(added_names)
             else:
-                log("info", f"{filename} — no change ({', '.join(desired_tag_names) or 'clean'})")
+                suffix = "; marker: pending → done" if tagged_only else ""
+                log("info", f"{filename} — no change ({', '.join(desired_tag_names) or 'clean'}){suffix}")
 
             processed += 1
             progress(processed / total)
 
-        page += 1
+        if not tagged_only:
+            page += 1
 
     summary = f"Done — {processed} processed, {tagged} tags added"
     if cleaned:
