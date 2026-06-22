@@ -1,6 +1,7 @@
 tests/fixtures/
 *.pt
 *.onnx
+debug_out/
 __pycache__/
 *.pyc
 *.pyo

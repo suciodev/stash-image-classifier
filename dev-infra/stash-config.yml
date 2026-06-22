@@ -37,9 +37,9 @@ sound_on_preview: false
 sprite_interval: 30
 sprite_screenshot_width: 160
 stash:
-    - path: data/fixtures
+    - excludeimage: false
       excludevideo: false
-      excludeimage: false
+      path: data/fixtures
 theme_color: '#202b33'
 ui:
     frontPageContent:
@@ -85,6 +85,17 @@ ui:
           sortBy: date
     lastNoteSeen: 20251026
     taskDefaults:
+        generate:
+            covers: true
+            markerScreenshots: true
+            markers: true
+            phashes: true
+            previewOptions:
+                previewPreset: slow
+                previewSegmentDuration: 0
+                previewSegments: 0
+            previews: true
+            sprites: true
         scan:
             scanGenerateClipPreviews: false
             scanGenerateCovers: true

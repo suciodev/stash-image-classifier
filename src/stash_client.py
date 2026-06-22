@@ -82,6 +82,53 @@ class StashClient:
             for img in raw
         ]
 
+    def count_images_by_tag(self, tag_id: str) -> int:
+        query = """
+        query CountImagesByTag($image_filter: ImageFilterType) {
+            findImages(image_filter: $image_filter, filter: { per_page: 1 }) {
+                count
+            }
+        }
+        """
+        variables = {
+            "image_filter": {
+                "tags": {"value": [tag_id], "modifier": "INCLUDES_ALL"}
+            }
+        }
+        return self._query(query, variables)["findImages"]["count"]
+
+    def find_images_by_tag(self, tag_id: str, page: int = 1, per_page: int = 50) -> list[dict]:
+        query = """
+        query FindImagesByTag($image_filter: ImageFilterType, $filter: FindFilterType) {
+            findImages(image_filter: $image_filter, filter: $filter) {
+                images {
+                    id
+                    visual_files {
+                        ... on ImageFile {
+                            path
+                        }
+                    }
+                    tags { id }
+                }
+            }
+        }
+        """
+        variables = {
+            "image_filter": {
+                "tags": {"value": [tag_id], "modifier": "INCLUDES_ALL"}
+            },
+            "filter": {"page": page, "per_page": per_page},
+        }
+        raw = self._query(query, variables)["findImages"]["images"]
+        return [
+            {
+                "id": img["id"],
+                "path": img["visual_files"][0]["path"] if img.get("visual_files") else None,
+                "tag_ids": [t["id"] for t in img.get("tags", [])],
+            }
+            for img in raw
+        ]
+
     def find_or_create_tag(self, name: str) -> str:
         tag_id = self._find_tag(name)
         if tag_id:
