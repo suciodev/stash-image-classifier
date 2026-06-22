@@ -1,7 +1,7 @@
-name: Image Classifier
-description: Classifies images using local ML inference. Applies exclude/NSFW severity tags (explicit, revealing, suggestive) based on person detection (YOLOv8) and body-part detection (NudeNet).
+name: PerceptTag
+description: ML-powered image tagger for Stash. Applies exclude/NSFW severity tags (explicit, revealing, suggestive) using local YOLOv8 person detection and NudeNet body-part inference. Fully offline — no AI API calls.
 url: https://github.com/suciodev/stash-image-classifier
-version: 0.3.0
+version: 0.4.0
 exec:
   - python
   - "{pluginDir}/main.py"
@@ -24,6 +24,15 @@ tasks:
       mode: classify
       batch_size: 50
       recheck_exclude: true
+  - name: Classify Marked Images
+    description: >
+      Classifies only images tagged with 'percepttag:pending'. Applies exclude/NSFW
+      severity tags as normal, then swaps the marker to 'percepttag:done'. Use
+      Stash's bulk-select UI to mark images before running.
+    defaultArgs:
+      mode: classify
+      batch_size: 50
+      tagged_only: true
 hooks:
   - name: Auto-classify on scan
     description: Classify each image as it is scanned and apply exclude if no person or NSFW content is detected.
