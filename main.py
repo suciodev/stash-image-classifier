@@ -120,6 +120,8 @@ def run_classify(client: "StashClient", classifier: "ImageClassifier", nsfw_clas
 
             if not image_path:
                 log("warning", f"{filename} — no path, skipping")
+                if tagged_only:
+                    client.update_image_tags(image["id"], [done_tag_id], [pending_tag_id], existing_tag_ids)
                 processed += 1
                 progress(processed / total)
                 continue
