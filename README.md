@@ -1,4 +1,4 @@
-# stash-image-classifier
+# PerceptTag
 
 A [Stash](https://github.com/stashapp/stash) plugin that classifies images using local ML inference and auto-applies tags. The initial use case: tag images where no person is the main subject with an `exclude` label — useful for filtering Instagram media libraries.
 
@@ -29,8 +29,18 @@ NudeNet runs unconditionally (not gated on YOLO) because YOLOv8 misses people in
 | **Classify All Images** | Tasks panel → run once to tag the entire library |
 | **Classify Untagged Images** | Tasks panel → skips images already carrying any classifier tag; safe to re-run after adding new images |
 | **Recheck Exclude-Tagged Images** | Tasks panel → re-runs only `exclude`-tagged images; useful after threshold tuning |
+| **Classify Marked Images** | Tasks panel → classifies only images tagged `percepttag:pending`; swaps the marker to `percepttag:done` when done. Use Stash's bulk-select UI to mark a gallery or studio before running. |
 | **Auto-hook** | Fires on `Image.Create.Post` — classifies each image as it is scanned |
-| **Per-image scraper** | Image edit dialog → "Scrape with Image Classifier" — classifies one image on demand |
+| **Per-image scraper** | Image edit dialog → "Scrape with PerceptTag" — classifies one image on demand |
+
+### Selective classification workflow
+
+For large libraries (10k+ images) where classifying the full library is too slow, use the marker-tag workflow:
+
+1. In Stash, filter to the gallery, studio, or folder you want to process
+2. Select all images → bulk-apply the tag `percepttag:pending`
+3. Run **Classify Marked Images** from the Tasks panel
+4. Each image is classified and its marker swapped from `percepttag:pending` → `percepttag:done`
 
 ## Installation
 
