@@ -42,7 +42,8 @@ RUN pip install --no-cache-dir \
     google-api-python-client \
     Pillow \
     ultralytics \
-    opencv-python-headless
+    opencv-python-headless \
+    "nudenet>=3.0,<4.0"
 
 # python:3.12-slim already provides /usr/local/bin/python; also add /usr/bin/python
 # so the plugin manifest (exec: python main.py) resolves under both PATH layouts.

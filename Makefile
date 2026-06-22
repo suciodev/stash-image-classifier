@@ -17,7 +17,8 @@ RSYNC_FLAGS = -av --delete \
 	--exclude='CLAUDE.md' \
 	--exclude='Makefile' \
 	--exclude='dev-infra/' \
-	--exclude='yolov8n.pt'
+	--exclude='yolov8n.pt' \
+	--exclude='640m.onnx'
 
 .PHONY: test check-fixtures test-scraper-dev \
         deploy-dev deploy-scraper-dev start-dev stop-dev logs-dev rebuild-dev \
@@ -42,6 +43,7 @@ deploy-dev:
 	mkdir -p "$(DEV_PLUGIN_DIR)/src"
 	rsync $(RSYNC_FLAGS) ./ "$(DEV_PLUGIN_DIR)/"
 	cp yolov8n.pt "$(DEV_PLUGIN_DIR)/yolov8n.pt"
+	cp 640m.onnx "$(DEV_PLUGIN_DIR)/640m.onnx"
 	@echo "Plugin deployed → $(DEV_PLUGIN_DIR)"
 
 deploy-scraper-dev:
@@ -84,6 +86,7 @@ deploy-scraper:
 
 deploy-model: deploy
 	cp yolov8n.pt "$(PROD_PLUGIN_DIR)/yolov8n.pt"
+	cp 640m.onnx "$(PROD_PLUGIN_DIR)/640m.onnx"
 	@echo "Model deployed → $(PROD_PLUGIN_DIR)"
 
 deploy-all: deploy-model deploy-scraper
