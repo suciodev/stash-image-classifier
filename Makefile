@@ -17,6 +17,8 @@ RSYNC_FLAGS = -av --delete \
 	--exclude='CLAUDE.md' \
 	--exclude='Makefile' \
 	--exclude='dev-infra/' \
+	--exclude='debug_out/' \
+	--exclude='docs/' \
 	--exclude='yolov8n.pt' \
 	--exclude='640m.onnx'
 
