@@ -190,16 +190,15 @@ def run_hook(client: "StashClient", classifier: "ImageClassifier", nsfw_classifi
         return
 
     exclude_tag_name = args.get("tag_name", "exclude")
-    exclude_tag_id = client.find_or_create_tag(exclude_tag_name)
 
-    has_person = classifier.has_person(image["path"])
-    is_nsfw = bool(nsfw_classifier.classify(image["path"])) if not has_person else False
-    if not has_person and not is_nsfw:
-        client.add_tag_to_image(image["id"], exclude_tag_id, existing_tag_ids=image["tag_ids"])
-        log("info", f"Image {image_id} — tagged '{exclude_tag_name}' (no person or NSFW detected)")
+    tag_names = _classify_image(image["path"], classifier, nsfw_classifier, exclude_tag_name)
+    if tag_names:
+        for tag_name in tag_names:
+            tag_id = client.find_or_create_tag(tag_name)
+            client.add_tag_to_image(image["id"], tag_id, existing_tag_ids=image["tag_ids"])
+        log("info", f"Image {image_id} — tagged: {', '.join(tag_names)}")
     else:
-        reason = "person detected" if has_person else "NSFW detected"
-        log("info", f"Image {image_id} — no tag applied ({reason})")
+        log("info", f"Image {image_id} — no tag applied (person detected, not NSFW)")
 
 
 if __name__ == "__main__":
